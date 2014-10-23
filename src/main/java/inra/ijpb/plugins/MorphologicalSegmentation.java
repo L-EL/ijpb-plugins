@@ -75,6 +75,7 @@ public class MorphologicalSegmentation implements PlugIn {
 	/** original input image */
 	ImagePlus inputImage = null;
 	
+	/** copy of original input image stack */
 	ImageStack inputStackCopy = null;
 
 	/** image to be displayed in the GUI */
