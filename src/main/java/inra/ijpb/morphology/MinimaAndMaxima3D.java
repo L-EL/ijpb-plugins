@@ -279,6 +279,28 @@ public class MinimaAndMaxima3D {
 		return regionalMinima(rec, conn);
 	}
 
+	
+	/**
+	 *  //  extendedMinima modify by Elise for having dynamic value as double 
+	 * Computes the extended minima in grayscale image <code>image</code>, 
+	 * keeping minima with the specified dynamic, and using the specified 
+	 * connectivity.
+	 */
+	public final static ImageStack extendedMinimaDouble(ImageStack stack,
+			double dynamic, int conn) {
+		ImageStack marker = stack.duplicate();
+		addValue(marker, dynamic);
+
+//		GeodesicReconstruction3DAlgo algo = new GeodesicReconstructionByErosion3DGray8Scanning(conn);
+//		ImageStack rec = algo.applyTo(marker, stack);
+		ImageStack rec = GeodesicReconstruction3D.reconstructByErosion(marker, stack, conn);
+
+		if( null == rec )
+			return null;
+		
+		return regionalMinima(rec, conn);
+	}
+	
 	/**
 	 * Imposes the maxima given by marker image into the input image, using 
 	 * the default connectivity.
