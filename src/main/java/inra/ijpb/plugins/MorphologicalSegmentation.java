@@ -1,22 +1,34 @@
 package inra.ijpb.plugins;
 
+import java.awt.Canvas;
 import java.awt.Color;
+import java.awt.Graphics;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.Panel;
+import java.awt.Point;
+import java.awt.Rectangle;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.AdjustmentEvent;
 import java.awt.event.AdjustmentListener;
 import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.awt.event.MouseListener;
+import java.awt.event.MouseMotionListener;
 import java.awt.event.MouseWheelEvent;
 import java.awt.event.MouseWheelListener;
 import java.awt.event.WindowEvent;
 import java.awt.image.ColorModel;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Iterator;
+import java.util.Random;
+import java.util.TreeSet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -36,14 +48,21 @@ import ij.IJ;
 import ij.ImagePlus;
 import ij.ImageStack;
 import ij.WindowManager;
+import ij.gui.GenericDialog;
 import ij.gui.ImageCanvas;
 import ij.gui.ImageRoi;
 import ij.gui.ImageWindow;
+import ij.gui.Line;
 import ij.gui.Overlay;
+import ij.gui.Roi;
+import ij.gui.ShapeRoi;
 import ij.gui.StackWindow;
+import ij.measure.Calibration;
 import ij.plugin.PlugIn;
 import ij.plugin.frame.Recorder;
+import ij.process.ImageConverter;
 import ij.process.ImageProcessor;
+import ij.process.StackConverter;
 import inra.ijpb.binary.BinaryImages;
 import inra.ijpb.binary.ConnectedComponents;
 import inra.ijpb.data.image.ColorImages;
@@ -54,6 +73,9 @@ import inra.ijpb.morphology.Strel3D;
 import inra.ijpb.util.ColorMaps;
 import inra.ijpb.util.ColorMaps.CommonLabelMaps;
 import inra.ijpb.watershed.Watershed;
+import ij.io.LogStream;
+
+//import Sync_Win; // .*;//. //DisplayChangeEvent // pb : http://www.wikihow.com/Add-JARs-to-Project-Build-Paths-in-Eclipse-%28Java%29
 
 /**
  * Plugin to perform automatic segmentation of 2D and 3D images 
@@ -85,7 +107,20 @@ public class MorphologicalSegmentation implements PlugIn {
 	ImageStack gradientStack = null;
 
 	/** image containing the final results of the watershed segmentation (basins with or without dams) */
-	ImagePlus resultImage = null;		
+	ImagePlus resultImage = null;	
+	
+	// add by elise 
+	/** image containing the final results of the watershed segmentation (basins with or without dams) */
+	ImagePlus markersImage = null;
+	ImagePlus reslicedImage = null;
+	double coordResliceToRaw[][] = new double[3][3],coordRawToReslice[][] = new double[3][3];
+	double origine[] = new double[3];
+	int xMouse, yMouse, zMouse, oldXMouse, oldYMouse, oldZMouse;
+	int p[]= new int[3];
+	int oldp[]= new int[3];
+	double currentMag ;
+	Rectangle currentSrcRect = new Rectangle(0,0,400,400);
+	//end add
 
 	/** parameters panel (segmentation + display options) */
 	JPanel paramsPanel = new JPanel();
@@ -156,6 +191,9 @@ public class MorphologicalSegmentation implements PlugIn {
 	JPanel showGradientPanel = new JPanel();
 	/** flag to apply gradient to the input image */
 	private boolean applyGradient = false;
+	
+	/** Resegmentation button (ReRun) ---> Elise*/
+	JButton ResegmentButton;
 
 	//	 Watershed segmentation panel design:
 	//
@@ -224,17 +262,63 @@ public class MorphologicalSegmentation implements PlugIn {
 	JLabel displayLabel = null;
 
 	/** text of option to display results as overlaid catchment basins */
-	static String overlaidBasinsText = "Overlaid basins";
+	static String  overlaidBasinsText = "Overlaid basins";
 	/** text of option to display results as overlaid dams (watershed lines) */
 	static String overlaidDamsText = "Overlaid dams";
 	/** text of option to display results as catchment basins */
 	static String catchmentBasinsText = "Catchment basins";
 	/** text of option to display results as binary watershed lines */
 	static String watershedLinesText = "Watershed lines";
+	
+	// add by elise
+	JPanel correctionPanel = new JPanel();
+	/** text of option to display results as overlaid markers on raw image*/
+	static String overlaidImageMarkersText = "image with markers";
+	/** text of option to display results as overlaid markers on catchement basins image */
+	static String overlaidBasinsMarkersText = "basins with markers";
+	/** text of option to display results as markers image */
+	static String markersText = "markers";
+		// checkbox to modify markers
+	/** checkbox to enable/disable the modifying of marker image */
+	JCheckBox addMarkersCheckBox;
+	/** flag to select/deselect the advanced options */
+	private boolean addMarkers = false;	
+	/** checkbox to enable/disable the modifying of marker image */
+	JCheckBox removeMarkersCheckBox;
+	/** flag to select/deselect the advanced options */
+	private boolean removeMarkers = false;	
+	
+	/** checkbox to enable/disable the modifying of local marker image */
+	JCheckBox localMarkersCheckBox;
+	/** flag to select/deselect the advanced options */
+	private boolean localMarkers = false;	
+	
+	/** checkbox to enable/disable the spreading of local markers */
+	JCheckBox spreadingCheckBox;
+	/** flag to select/deselect the spreading of local markers */
+	private boolean spreadingMarkers = false;
+	
+	/** checkbox to synchronize resliced image */
+	JCheckBox synchronizeCheckBox;
+	/** flag to select/deselect  resliced image synchronizing*/
+	private boolean synchronize = false;
+	
+	JCheckBox removeSmallLabelsCheckBox;
+	private boolean removeMinLabels = false;	
+	
+	/*threshold panel */
+	JPanel thresholdPanel = new JPanel();
+	/** thresold label */
+	JLabel thresholdLabel;
+	/**  threshold text field */
+	JTextField thresholdText;
+	
+	
+	//end add
 
 	/** list of result display options (to show in the GUI canvas) */
 	String[] resultDisplayOption = new String[]{ overlaidBasinsText, 
-			overlaidDamsText, catchmentBasinsText, watershedLinesText };
+			overlaidDamsText, catchmentBasinsText, watershedLinesText, overlaidImageMarkersText, overlaidBasinsMarkersText, markersText};
 	/** result display combo box */
 	JComboBox resultDisplayList = null;
 	/** panel to store the combo box with the display options */
@@ -265,9 +349,16 @@ public class MorphologicalSegmentation implements PlugIn {
 	private String stopText = "STOP";
 	/** tip text of the segmentation button when segmentation running */
 	private String stopTip = "Click to abort segmentation";
+	
+	  //add by ----> Elise
+    /** text of the segmentation button when segmentation not running */
+	private String ResegmentText = "ReRun";
+	/** tip text of the segmentation button when segmentation not running */
+	private String ResegmentTip = "ReRun the morphological segmentation";
+    //end Elise
 
 	/** enumeration of result modes */
-	public static enum ResultMode { OVERLAID_BASINS, OVERLAID_DAMS, BASINS, LINES };
+	public static enum ResultMode { OVERLAID_BASINS, OVERLAID_DAMS, BASINS, LINES ,OVERLAID_IMG_MARKERS,OVERLAID_BASINS_MARKERS,MARKERS}; //modify by elise
 
 	// Macro recording constants (corresponding to  
 	// the static method names to be called)
@@ -295,6 +386,7 @@ public class MorphologicalSegmentation implements PlugIn {
 	/**
 	 * Custom window to define the plugin GUI
 	 */
+	
 	private class CustomWindow extends StackWindow
 	{
 		/**
@@ -319,11 +411,115 @@ public class MorphologicalSegmentation implements PlugIn {
 
 					public void run()
 					{
+						IJ.log(""+e.getSource()+"");
+						
 						// "Run" segmentation button		
 						if( e.getSource() == segmentButton )
 						{
 							runSegmentation( command );						
-						}						
+						}	
+						// ReRun ---> add by Elise
+						else if( e.getSource() == ResegmentButton )
+						{
+							RerunSegmentation( command );
+						}
+						else if( e.getSource() == addMarkersCheckBox )
+						{
+							addMarkers = !addMarkers;
+							resultDisplayList.setSelectedItem( overlaidImageMarkersText);
+							updateResultOverlay();
+							if (addMarkers)
+							{
+								ic.addMouseListener(mlAdd);
+								ic.addMouseMotionListener(mlAddDragged);
+							}
+							else
+							{
+								ic.removeMouseListener(mlAdd); // doesn't work 
+								ic.removeMouseMotionListener(mlAddDragged);
+							}
+						}
+						else if( e.getSource() == removeMarkersCheckBox )
+						{
+							removeMarkers = !removeMarkers;
+							
+							if (removeMarkers)
+							{
+								ic.addMouseListener(mlRemove);
+								resultDisplayList.setSelectedItem( overlaidImageMarkersText );
+								updateResultOverlay();
+							}
+							else
+							{
+								ic.removeMouseListener(mlRemove); // doesn't work 
+							}
+						}
+						else if( e.getSource() == synchronizeCheckBox )
+						{
+							
+							synchronize = !synchronize;
+							 
+							
+							if (synchronize)
+							{
+								reslicedImage = AskForAnotherImage();
+								ImageWindow iw = reslicedImage.getWindow();
+								IJ.log(""+reslicedImage+"");
+								if( null ==  reslicedImage )
+								{
+									IJ.log( "The synchronization was interrupted!" );
+									IJ.showStatus( "The synchronization was interrupted!" );
+									IJ.showProgress( 1.0 );
+									return;
+								}
+								 changeOfBase();
+								 IJ.log("coordResliceToRaw =  "+coordResliceToRaw[0][0]+" "+coordResliceToRaw[0][1]+" "+coordResliceToRaw[0][2]+"\n "+coordResliceToRaw[1][0]+" "+coordResliceToRaw[1][1]+" "+coordResliceToRaw[1][2]+"\n "+coordResliceToRaw[2][0]+" "+coordResliceToRaw[2][1]+" "+coordResliceToRaw[2][2]+" \n");
+								 IJ.log(" coordRawToReslice = "+coordRawToReslice[0][0]+" "+coordRawToReslice[0][1]+" "+coordRawToReslice[0][2]+"\n "+coordRawToReslice[1][0]+" "+coordRawToReslice[1][1]+" "+coordRawToReslice[1][2]+"\n "+coordRawToReslice[2][0]+" "+coordRawToReslice[2][1]+" "+coordRawToReslice[2][2]+" \n");
+								 System.out.println(ic); 
+								//ic.addMouseListener(mlSyn); // no need to click on the segmentation plugin image
+								ic.addMouseMotionListener(mmlSyn);
+								//ic.addMouseWheelListener(mlSynWheel); // --> to improve : erase normal behavior of the Wheel
+								// synchro 
+								iw.getCanvas().addMouseMotionListener(mmlSyn);
+								iw.getCanvas().addMouseListener(mlSyn);
+								//iw.getCanvas().addMouseWheelListener(mlSynWheel); // --> to improve : erase normal behavior of the Wheel
+
+								
+							}
+							else
+							{
+								ImageWindow iw = reslicedImage.getWindow();
+								ic.removeMouseListener(mlSyn);
+								ic.removeMouseMotionListener(mmlSyn);
+								// synchro 
+								iw.getCanvas().removeMouseMotionListener(mmlSyn);
+								iw.getCanvas().removeMouseListener(mlSyn);
+								reslicedImage = null;
+							}
+						}
+						else if( e.getSource() == localMarkersCheckBox )
+						{
+							localMarkers = !localMarkers;
+							//resultDisplayList.setSelectedItem( overlaidImageMarkersText );
+							//updateResultOverlay();
+							if (localMarkers)
+							{
+								ic.addMouseListener(mlLocalChange);
+							}
+							else
+							{
+								ic.removeMouseListener(mlLocalChange); 
+							}
+						}
+						else if( e.getSource() == removeSmallLabelsCheckBox )
+						{
+							removeMinLabels = !removeMinLabels;
+						}
+						else if( e.getSource() == spreadingCheckBox )
+						{
+							spreadingMarkers = !spreadingMarkers;
+						}
+						//end add
 						// "Show result overlay" check box
 						else if( e.getSource() == toggleOverlayCheckBox )
 						{
@@ -395,7 +591,8 @@ public class MorphologicalSegmentation implements PlugIn {
 			super(imp, new ImageCanvas(imp));
 
 			final ImageCanvas canvas = (ImageCanvas) getCanvas();
-
+			
+			
 			// Zoom in if image is too small
 			while(ic.getWidth() < 512 && ic.getHeight() < 512)
 				IJ.run( imp, "In","" );
@@ -542,6 +739,45 @@ public class MorphologicalSegmentation implements PlugIn {
 			segmentButton = new JButton( segmentText );
 			segmentButton.setToolTipText( segmentTip );
 			segmentButton.addActionListener( listener );
+			
+			 // ReSegmentation button ---> Elise
+            ResegmentButton = new JButton( ResegmentText );
+            ResegmentButton.setToolTipText( ResegmentTip );
+            ResegmentButton.addActionListener( listener );
+            
+            	// add modify markers button
+         			addMarkersCheckBox = new JCheckBox( "add markers", addMarkers );
+         			addMarkersCheckBox.setToolTipText( "Enable modifying markers" );
+         			addMarkersCheckBox.addActionListener( listener );
+         			removeMarkersCheckBox = new JCheckBox( "remove markers", removeMarkers );
+         			removeMarkersCheckBox.setToolTipText( "Enable modifying markers" );
+         			removeMarkersCheckBox.addActionListener( listener );
+         			localMarkersCheckBox = new JCheckBox( "change localy markers", localMarkers );
+         			localMarkersCheckBox.setToolTipText( "Enable modifying localy markers" );
+         			localMarkersCheckBox.addActionListener( listener );
+         			
+         			spreadingCheckBox = new JCheckBox( "spread", spreadingMarkers);
+         			spreadingCheckBox.setToolTipText( "spread local markers" );
+         			spreadingCheckBox.addActionListener( listener );
+        			
+         			removeSmallLabelsCheckBox = new JCheckBox( "remove small markers", removeMinLabels );
+         			removeSmallLabelsCheckBox.setToolTipText( "remove small labels" );
+         			removeSmallLabelsCheckBox.addActionListener( listener );
+         			
+         			synchronizeCheckBox = new JCheckBox( "synchronize", synchronize );
+         			synchronizeCheckBox.setToolTipText( "synchronize resliced image" );
+         			synchronizeCheckBox.addActionListener( listener );
+         			
+         		// size label threshold  value ("threshold")
+         			thresholdLabel = new JLabel( "threshold" );
+         			thresholdLabel.setToolTipText( "threshold" );
+         			thresholdText = new JTextField( "10", 5 );
+         			thresholdText.setToolTipText( "threshold" );
+         			thresholdPanel.add( thresholdLabel );
+         			thresholdPanel.add( thresholdText );
+         			thresholdPanel.setToolTipText( "threshold" );	
+        			
+            //end add
 
 			// Segmentation panel
 			segmentationPanel.setBorder( BorderFactory.createTitledBorder( "Watershed Segmentation" ) );
@@ -565,7 +801,31 @@ public class MorphologicalSegmentation implements PlugIn {
 			segmentationConstraints.anchor = GridBagConstraints.CENTER;
 			segmentationConstraints.fill = GridBagConstraints.NONE;
 			segmentationPanel.add( segmentButton, segmentationConstraints );
-
+			
+			// add by ----> Elise
+			segmentationConstraints.gridy++;
+			segmentationPanel.add( addMarkersCheckBox, segmentationConstraints );
+			segmentationConstraints.gridx++;		
+			segmentationPanel.add( removeMarkersCheckBox, segmentationConstraints );
+			segmentationConstraints.gridx--;
+			segmentationConstraints.gridy++;			
+			segmentationPanel.add( localMarkersCheckBox, segmentationConstraints );
+			segmentationConstraints.gridx++;		
+			segmentationPanel.add( spreadingCheckBox, segmentationConstraints );
+			segmentationConstraints.gridx--;
+			segmentationConstraints.gridy++;			
+			segmentationPanel.add( removeSmallLabelsCheckBox, segmentationConstraints );
+			segmentationConstraints.gridx++;		
+			segmentationPanel.add( thresholdPanel, segmentationConstraints );
+			segmentationConstraints.gridx--;	
+			segmentationConstraints.gridy++;					
+			segmentationPanel.add( synchronizeCheckBox, segmentationConstraints );
+			segmentationConstraints.gridx++;
+			segmentationConstraints.anchor = GridBagConstraints.CENTER;
+			segmentationConstraints.fill = GridBagConstraints.NONE;
+			segmentationPanel.add( ResegmentButton, segmentationConstraints );
+			// end add
+    		
 			// === Results panel ===
 
 			// Display result panel
@@ -812,6 +1072,7 @@ public class MorphologicalSegmentation implements PlugIn {
 			gradientCheckBox.removeActionListener( listener );
 			advancedOptionsCheckBox.removeActionListener( listener );
 			segmentButton.removeActionListener( listener );
+			ResegmentButton.removeActionListener( listener );// add by elise 
 			resultDisplayList.removeActionListener( listener );
 			toggleOverlayCheckBox.removeActionListener( listener );
 			resultButton.removeActionListener( listener );
@@ -827,12 +1088,12 @@ public class MorphologicalSegmentation implements PlugIn {
 
 		/**
 		 * Set dynamic value in the GUI
-		 * 
+		 * modify by Elise : int to double
 		 * @param dynamic dynamic value
 		 */
-		void setDynamic( int dynamic )
+		void setDynamic( double dynamic )
 		{
-			dynamicText.setText( Integer.toString(dynamic) );
+			dynamicText.setText( Double.toString(dynamic) );
 		}
 
 		/**
@@ -982,12 +1243,23 @@ public class MorphologicalSegmentation implements PlugIn {
 							record( SET_RADIUS, arg );
 						}
 
-						IJ.log( "Running extended minima with dynamic value " + (int)dynamic + "..." );
+						IJ.log( "Running extended minima with dynamic value " + dynamic + "..." ); //modify by Elise (remove (int) in front of dynamic value)
 						final long step0 = System.currentTimeMillis();				
 
 						// Run extended minima
-						ImageStack regionalMinima = MinimaAndMaxima3D.extendedMinima( image, (int)dynamic, connectivity );
-
+						ImageStack regionalMinima = MinimaAndMaxima3D.extendedMinimaDouble( image, dynamic, connectivity );//modify by Elise (remove (int) in front of dynamic value)
+						// add by elise
+						markersImage = new ImagePlus( "markers", regionalMinima );
+						markersImage.setCalibration( inputImage.getCalibration() );
+						
+						//conversion 32 bit : la segmentation ne fonctionne plus
+						//if (imp.getStackSize() > 1)     new StackConverter(markersImage).convertToGray32();
+						 //else     new ImageConverter(markersImage).convertToGray32(); 
+						
+						
+						
+						//end add 
+						
 						if( null == regionalMinima )
 						{
 							IJ.log( "The segmentation was interrupted!" );
@@ -1016,7 +1288,7 @@ public class MorphologicalSegmentation implements PlugIn {
 						IJ.log( "Imposition took " + (step2-step1) + " ms." );
 
 						IJ.log( "Labeling regional minima..." );
-
+						//new ImagePlus("imposedMinima",imposedMinima).show();
 						// Label regional minima
 						ImageStack labeledMinima = ConnectedComponents.computeLabels( regionalMinima, connectivity, 32 );
 						if( null == labeledMinima )
@@ -1051,6 +1323,9 @@ public class MorphologicalSegmentation implements PlugIn {
 						}
 						if( null == resultStack )
 						{
+							new ImagePlus("a",imposedMinima).show();
+							new ImagePlus("b",labeledMinima).show();
+							
 							IJ.log( "The segmentation was interrupted!" );
 							IJ.showStatus( "The segmentation was interrupted!" );
 							IJ.showProgress( 1.0 );
@@ -1093,7 +1368,7 @@ public class MorphologicalSegmentation implements PlugIn {
 
 						// Record
 						String[] arg = new String[] {
-								"tolerance=" + Integer.toString( (int) dynamic ),
+								"tolerance=" + Double.toString(  dynamic ), //modify by Elise (remove (int) in front of dynamic value)
 								"calculateDams=" + calculateDams,
 								"connectivity=" + Integer.toString( connectivity ) };
 						record( RUN_SEGMENTATION, arg );
@@ -1118,6 +1393,256 @@ public class MorphologicalSegmentation implements PlugIn {
 				setParamsEnabled( true );			
 			}
 		}
+		
+		// add by Elise
+		/** Modified by elise in RerunSegmentation (original from morphological segmentation)
+		 * Run morphological segmentation pipeline
+		 */
+			private void RerunSegmentation( String command ) 
+			{
+			// If the command is "Resegment"
+				//ij.io.LogStream.redirectSystem(true); 
+			if ( command.equals( ResegmentText ) ) 
+			{			
+				
+				// read connectivity
+				int readConn = Integer.parseInt( (String) connectivityList.getSelectedItem() );
+
+				// convert connectivity to 3D if needed (2D images are processed as 3D)
+				if( inputIs2D )
+					readConn = readConn == 4 ? 6 : 26;
+				
+				final int connectivity = readConn;
+
+				// before here : read dynamic (no need )
+				
+
+				double max = 255;
+				int bitDepth = inputImage.getBitDepth();
+				if( bitDepth == 16 )
+					max = 65535;
+				else if( bitDepth == 32 )
+					max = Float.MAX_VALUE;			
+
+				// Set button text to "STOP"
+				ResegmentButton.setText( stopText );
+				ResegmentButton.setToolTipText( stopTip );
+				
+				final Thread oldThread = segmentationThread;
+				
+				// Thread to run the segmentation
+				Thread newThread = new Thread() {								 
+
+					public void run()
+					{
+						
+						// Wait for the old task to finish
+						if (null != oldThread) 
+						{
+							try { 
+								IJ.log("Waiting for old task to finish...");
+								oldThread.join(); 
+							} 
+							catch (InterruptedException ie)	{ /*IJ.log("interrupted");*/ }
+						}
+
+						// read dams flag
+						calculateDams = damsCheckBox.isSelected();
+						
+						
+						// disable parameter panel
+						setParamsEnabled( false );
+
+						ImageStack image = inputImage.getImageStack();
+
+						final long start = System.currentTimeMillis();
+
+						
+
+						IJ.log( "Running find markers by Elise ^^ ..." );
+						final long step0 = System.currentTimeMillis();				
+						ImageStack regionalMinima = null;
+						if( removeMinLabels)
+						{
+							// read threshold
+							int seuil;
+							
+							
+							try{
+								seuil = Integer.parseInt( thresholdText.getText() );
+							}
+							catch( NullPointerException ex )
+							{
+								IJ.error( "Morphological Segmentation", "ERROR: missing threshold value" );
+								return;
+							}
+							catch( NumberFormatException ex )
+							{
+								IJ.error( "Morphological Segmentation", "ERROR: threshold value must be a number" );
+								return;
+							}
+							
+							filterLabelSize( seuil);
+							regionalMinima = markersImage.getImageStack().duplicate();
+						}
+						else if(addMarkers || removeMarkers || localMarkers)
+						{
+							regionalMinima = markersImage.getImageStack().duplicate();
+						}
+						else
+						{			
+							IJ.log( "start" );
+							ImagePlus LabeledImage = AskForAnotherImage();
+							if( null ==  LabeledImage )
+							{
+								IJ.log( "The segmentation was interrupted!" );
+								IJ.showStatus( "The segmentation was interrupted!" );
+								IJ.showProgress( 1.0 );
+								return;
+							}
+							regionalMinima  = LabeledImage.getStack(); // modif by Elise
+
+							
+						}
+						//add by elise
+						markersImage = new ImagePlus( "markers", regionalMinima );
+						markersImage.setCalibration( inputImage.getCalibration() );
+						// end add
+						if( null == regionalMinima )
+						{
+							IJ.log( "The segmentation was interrupted!" );
+							IJ.showStatus( "The segmentation was interrupted!" );
+							IJ.showProgress( 1.0 );
+							return;
+						}
+						
+						final long step1 = System.currentTimeMillis();		
+						IJ.log( "Regional minima took " + (step1-step0) + " ms.");
+
+						IJ.log( "Imposing regional minima on original image (connectivity = " + connectivity + ")..." );
+
+						// Impose regional minima over the original image
+						ImageStack imposedMinima = MinimaAndMaxima3D.imposeMinima( image, regionalMinima, connectivity );
+						
+						if( null == imposedMinima )
+						{
+							IJ.log( "The segmentation was interrupted!" );
+							IJ.showStatus( "The segmentation was interrupted!" );
+							IJ.showProgress( 1.0 );
+							return;
+						}
+						
+						final long step2 = System.currentTimeMillis();
+						IJ.log( "Imposition took " + (step2-step1) + " ms." );
+
+						IJ.log( "Labeling regional minima..." );
+
+						// Label regional minima
+						ImageStack labeledMinima = ConnectedComponents.computeLabels( regionalMinima, connectivity, 32 );
+						if( null == labeledMinima )
+						{
+							IJ.log( "The segmentation was interrupted!" );
+							IJ.showStatus( "The segmentation was interrupted!" );
+							IJ.showProgress( 1.0 );
+							return;
+						}
+
+						final long step3 = System.currentTimeMillis();
+						IJ.log( "Connected components took " + (step3-step2) + " ms." );
+
+						// Apply watershed		
+						IJ.log("Running watershed...");
+
+						ImageStack resultStack = Watershed.computeWatershed( imposedMinima, labeledMinima, 
+								connectivity, calculateDams );
+						if( null == resultStack )
+						{
+							IJ.log( "The segmentation was interrupted!" );
+							IJ.showStatus( "The segmentation was interrupted!" );
+							IJ.showProgress( 1.0 );
+							return;
+						}
+						
+						resultImage = new ImagePlus( "watershed", resultStack );
+						resultImage.setCalibration( inputImage.getCalibration() );
+
+						final long end = System.currentTimeMillis();
+						IJ.log( "Watershed 3d took " + (end-step3) + " ms.");
+						IJ.log( "Whole plugin took " + (end-start) + " ms.");
+
+						// Adjust min and max values to display
+						resultDisplayList.setSelectedItem( overlaidBasinsText );
+						
+						Images3D.optimizeDisplayRange( resultImage );
+						
+						byte[][] colorMap = CommonLabelMaps.fromLabel( CommonLabelMaps.SPECTRUM.getLabel() ).computeLut(255, true);;
+						ColorModel cm = ColorMaps.createColorModel(colorMap, Color.BLACK);
+						resultImage.getProcessor().setColorModel(cm);
+						resultImage.getImageStack().setColorModel(cm);
+						resultImage.updateAndDraw();
+
+						// display result overlaying the input image
+						updateResultOverlay();
+						showColorOverlay = true;
+
+						// enable parameter panel
+						setParamsEnabled( true );
+						// set button back to initial text
+						ResegmentButton.setText( ResegmentText );
+						ResegmentButton.setToolTipText( ResegmentTip );
+						// set thread to null					
+						segmentationThread = null;
+
+					}
+				};
+				
+				segmentationThread = newThread;
+				newThread.start();
+				
+			}
+			else if( command.equals( stopText ) ) 							  
+			{
+				if( null != segmentationThread )
+					segmentationThread.interrupt();
+				else
+					IJ.log("Error: interrupting segmentation failed becaused the thread is null!");
+				
+				// set button back to "Segment"
+				ResegmentButton.setText( ResegmentText );
+				ResegmentButton.setToolTipText( ResegmentTip );
+				// enable parameter panel
+				setParamsEnabled( true );			
+			}
+		}
+			
+			void synchronizeReslicing()
+			{
+				
+				IJ.runPlugIn(imp, "Reslice [/]...", "");
+				
+			Roi roi = imp.getRoi();	
+			
+			if (roi == null) return ;
+			int roiType = roi.getType();
+			ImageStack stack = imp.getStack();
+			int stackSize = stack.getSize();
+			ImageProcessor ip_out = null, ip;
+			boolean ortho = false;
+			float[] line = null;
+			double x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+			
+			if (roiType == Roi.LINE) {
+				Line lineRoi = (Line) roi;
+				x1 = lineRoi.x1d;
+				y1 = lineRoi.y1d;
+				x2 = lineRoi.x2d;
+				y2 = lineRoi.y2d;
+				ortho = (x1 == x2 || y1 == y2);
+			}
+			
+			}
+		//end by elise	
+			
 
 		/**
 		 * Update the display image with the gradient or the input image voxels.
@@ -1169,8 +1694,17 @@ public class MorphologicalSegmentation implements PlugIn {
 				else if( displayOption.equals( watershedLinesText ) )
 					watershedResult = getResult( ResultMode.LINES );
 				else if ( displayOption.equals( overlaidBasinsText ) )
-					watershedResult = getResult( ResultMode.OVERLAID_BASINS );									
-
+					watershedResult = getResult( ResultMode.OVERLAID_BASINS );
+				
+				// add by elise
+				else if ( displayOption.equals( overlaidBasinsMarkersText ) )
+					watershedResult = getResult( ResultMode.OVERLAID_BASINS_MARKERS );
+				else if ( displayOption.equals( markersText ) )
+					watershedResult = getResult( ResultMode.MARKERS );
+				else if ( displayOption.equals( overlaidImageMarkersText ) )
+					watershedResult = getResult( ResultMode.OVERLAID_IMG_MARKERS );
+				// end add
+				
 				if( null != watershedResult )
 				{
 					watershedResult.show();
@@ -1234,7 +1768,7 @@ public class MorphologicalSegmentation implements PlugIn {
 			
 
 			switch( mode ){
-				case OVERLAID_BASINS:
+			case OVERLAID_BASINS:
 					result = displayImage.duplicate();
 					result.setOverlay( null ); // remove existing overlay
 					ImageStack is = new ImageStack( displayImage.getWidth(), displayImage.getHeight() );
@@ -1269,6 +1803,24 @@ public class MorphologicalSegmentation implements PlugIn {
 					IJ.run( result, "Invert", "stack" );
 					result.setTitle( title + "-watershed-lines" + ext );								
 					break;
+			//add by elise
+				case MARKERS:
+					result = markersImage.duplicate();
+					result.setTitle( title + "-markers" + ext );	
+					break;
+				case OVERLAID_IMG_MARKERS:
+					result= markersImage.duplicate();
+					result = ColorImages.binaryOverlay( displayImage, result, Color.red ) ;
+					result.setTitle( title + "-img-markers" + ext );	
+					break;
+				case OVERLAID_BASINS_MARKERS:
+					result = markersImage.duplicate();
+					result = ColorImages.binaryOverlay( resultImage, result, Color.white ) ;
+					result.setTitle( title + "-catchment-basins-markers" + ext );				
+					break;
+					
+			//end add
+					
 			}
 
 			return result;
@@ -1315,8 +1867,9 @@ public class MorphologicalSegmentation implements PlugIn {
 			if( null != resultImage )
 			{
 				displayImage.deleteRoi();
+				// displayImage = new ImagePlus( inputImage.getTitle(), inputStackCopy );
 				int slice = displayImage.getCurrentSlice();
-
+				Overlay overlay = new Overlay();
 				final String displayOption = (String) resultDisplayList.getSelectedItem();							
 
 				ImageRoi roi = null;
@@ -1344,8 +1897,62 @@ public class MorphologicalSegmentation implements PlugIn {
 					roi = new ImageRoi(0, 0, resultImage.getImageStack().getProcessor( slice ) );
 					roi.setOpacity( opacity );
 				}
-												
-				displayImage.setOverlay( new Overlay( roi ) );
+						
+				// add by elise
+				else if( displayOption.equals( markersText ) )	
+				{
+					roi = new ImageRoi(0, 0, markersImage.getImageStack().getProcessor( slice ) );
+					roi.setOpacity( 1.0 );
+				}
+				else if( displayOption.equals( overlaidBasinsMarkersText ) )	
+				{	
+					roi = new ImageRoi(0, 0, resultImage.getImageStack().getProcessor( slice ) );
+					roi.setOpacity( 1.0 );
+					overlay.add(roi);
+					//displayImage.setOverlay( new Overlay( roi ) );
+					roi = new ImageRoi(0, 0, markersImage.getImageStack().getProcessor( slice ) );
+					roi.setOpacity( opacity );
+					
+					/*
+					//displayImage = resultImage;
+					displayImage.setImage( resultImage);
+					resultImage.draw();
+					roi = new ImageRoi(0, 0, markersImage.getImageStack().getProcessor( slice ) );
+					roi.setOpacity( opacity);
+					/*
+					ImageRoi roiLabel = null;
+					roiLabel = new ImageRoi(0, 0, resultImage.getImageStack().getProcessor( slice ) );
+					//roiLabel.setOpacity( 1.0 );
+					ShapeRoi roi1 = new ShapeRoi(roiLabel);
+					roi = new ImageRoi(0, 0, markersImage.getImageStack().getProcessor( slice ) );
+					roi.setOpacity( opacity );
+					ShapeRoi roi2 = new ShapeRoi(roi);
+					ShapeRoi  combined = roi2.or(roi1);
+					roi = (ImageRoi)combined.shapeToRoi(); //getRois()[0]
+					roi.drawPixels(displayImage.getProcessor());
+					roi.setOpacity( 1.0 );
+					/*
+					ImagePlus aux = new ImagePlus( "", resultImage.getImageStack().getProcessor( slice ) );
+					roi = new ImageRoi(0, 0, markersImage.getImageStack().getProcessor( slice ) );
+					roi.setOpacity( opacity );
+					aux.setOverlay( new Overlay( roi ) );
+					//aux = aux.flatten();
+					roi = new ImageRoi(0, 0, aux.getImageStack().getProcessor( slice ) );
+					roi.setOpacity( 1.0 );*/
+				}
+				else if( displayOption.equals( overlaidImageMarkersText ) )	
+				{
+					ImageProcessor markers = BinaryImages.binarize( markersImage.getImageStack().getProcessor( slice ) );
+					ImageProcessor gray = displayImage.getImageStack().getProcessor( slice );
+					roi = new ImageRoi(0, 0, ColorImages.binaryOverlay( gray, markers, Color.red ) ) ;
+					roi.setOpacity( 1.0 );
+
+				}				
+				// end add
+				overlay.add(roi);
+				displayImage.setOverlay( overlay );
+				//displayImage.setOverlay( new Overlay( roi ) );
+				
 			}
 		}
 		
@@ -1371,6 +1978,994 @@ public class MorphologicalSegmentation implements PlugIn {
 			}
 		}
 		
+		
+		// add by elise for ... doesn't work (Is it because it's a 2D image ?)
+		MouseListener mlAdd = new MouseAdapter() {
+		    @Override
+		    public void mouseClicked(MouseEvent eImg) {
+		    	IJ.log(""+eImg.getSource()+"");
+		    	int x = eImg.getX();
+		    	int y = eImg.getY();
+		    	int ox = imp.getWindow().getCanvas().offScreenX(x);
+				int oy = imp.getWindow().getCanvas().offScreenY(y);
+		    	int z = displayImage.getCurrentSlice();
+		    	//imp.mouseMoved(x, y); //--> affiche les coordonnées au niveau de la fenetre imagej
+		    	ImageStack imgStack = markersImage.getStack();
+		    	//markersImage.setDefault16bitRange(16);
+		    	
+		    	//IJ.log(""+markersImage.getPixel(x,y)+"");  // affiche une adresse car 3D pas 2D
+		    	//IJ.log(""+imgStack.getVoxel(x,y,z)+"");
+		    	IJ.log(""+imgStack.getBitDepth()+"");
+		    	//IJ.log(""+imgStack.getHeight()+"");
+		    	//IJ.log(""+imgStack.getWidth()+"");
+		    	//IJ.log(""+imgStack.getSize()+"");
+		    	//IJ.log(""+markersImage.getType()+"");
+		    	imgStack.setVoxel(ox, oy, z-1, 255);
+		    	if(spreadingMarkers)
+				{
+						
+						//if(regionalMinima.getVoxel(x, y, z) !=0 )
+		    		imgStack.setVoxel(ox, oy, z,255);
+		    		imgStack.setVoxel(ox+1, oy, z,255);
+		    		imgStack.setVoxel(ox, oy+1, z,255);
+		    		imgStack.setVoxel(ox, oy, z+1,255);
+		    		imgStack.setVoxel(ox-1, oy, z,255);
+		    		imgStack.setVoxel(ox, oy-1, z,255);
+		    		imgStack.setVoxel(ox, oy, z-1,255);
+						
+				
+				}
+		    	IJ.log(""+imgStack.getVoxel(x,y,z)+"");
+		    	markersImage.updateAndDraw();
+		    	updateResultOverlay();
+		    	//IJ.log(""+x+"  "+y+"  "+z+"");
+		    	//IJ.log(""+ox+"  "+oy+" ");
+		    	//IJ.log(""+markersImage.getPixel(x,y)+""); // affiche une adresse car 3D pas 2D
+		    	
+		    }
+		    
+		};
+		MouseMotionListener mlAddDragged = new MouseAdapter() {
+		    @Override
+		    public void mouseDragged(MouseEvent eImg) {
+		    	IJ.log(""+eImg.getSource()+"");
+		    	int x = eImg.getX();
+		    	int y = eImg.getY();
+		    	int ox = imp.getWindow().getCanvas().offScreenX(x);
+				int oy = imp.getWindow().getCanvas().offScreenY(y);
+		    	int z = displayImage.getCurrentSlice();
+		    	//imp.mouseMoved(x, y); //--> affiche les coordonnées au niveau de la fenetre imagej
+		    	ImageStack imgStack = markersImage.getStack();
+		    	//markersImage.setDefault16bitRange(16);
+		    	
+		    	//IJ.log(""+markersImage.getPixel(x,y)+"");  // affiche une adresse car 3D pas 2D
+		    	//IJ.log(""+imgStack.getVoxel(x,y,z)+"");
+		    	IJ.log(""+imgStack.getBitDepth()+"");
+		    	//IJ.log(""+imgStack.getHeight()+"");
+		    	//IJ.log(""+imgStack.getWidth()+"");
+		    	//IJ.log(""+imgStack.getSize()+"");
+		    	//IJ.log(""+markersImage.getType()+"");
+		    	imgStack.setVoxel(ox, oy, z-1, 255);
+		    	if(spreadingMarkers)
+				{
+						
+						//if(regionalMinima.getVoxel(x, y, z) !=0 )
+		    		imgStack.setVoxel(ox, oy, z,255);
+		    		imgStack.setVoxel(ox+1, oy, z,255);
+		    		imgStack.setVoxel(ox, oy+1, z,255);
+		    		imgStack.setVoxel(ox, oy, z+1,255);
+		    		imgStack.setVoxel(ox-1, oy, z,255);
+		    		imgStack.setVoxel(ox, oy-1, z,255);
+		    		imgStack.setVoxel(ox, oy, z-1,255);
+						
+				
+				}
+		    	IJ.log(""+imgStack.getVoxel(x,y,z)+"");
+		    	markersImage.updateAndDraw();
+		    	updateResultOverlay();
+		    	//IJ.log(""+x+"  "+y+"  "+z+"");
+		    	//IJ.log(""+ox+"  "+oy+" ");
+		    	//IJ.log(""+markersImage.getPixel(x,y)+""); // affiche une adresse car 3D pas 2D
+		    	
+		    }
+		    
+		};
+		
+		//end add
+		
+		
+		// add by elise for 
+				MouseListener mlRemove = new MouseAdapter() {
+				    @Override
+				    public void mouseClicked(MouseEvent eImg) {
+				    	IJ.log(""+eImg.getSource()+"");
+				    	int xi = eImg.getX();
+				    	int yi = eImg.getY();
+				    	int ox = imp.getWindow().getCanvas().offScreenX(xi);
+						int oy = imp.getWindow().getCanvas().offScreenY(yi);
+				    	int zi = displayImage.getCurrentSlice();
+				    	
+				    	
+				    	ImageStack imgStack = resultImage.getStack();
+				    	ImageStack markersStack = markersImage.getStack();
+				    	//markersImage.setDefault16bitRange(16);
+				    	double label = imgStack.getVoxel(ox,oy,zi-1);
+				    	
+				    	int width = imgStack.getWidth();
+						int height = imgStack.getHeight();
+						int nSlices = imgStack.getSize();
+						int bitDepth = imgStack.getBitDepth() ;
+						for(int z = 0; z < nSlices; z++){  	 	 	
+					  	 	 	for (int y = 0; y <height; y++){
+					  	 	 		for (int x = 0; x < width; x++){
+					  	 	 			if(imgStack.getVoxel(x, y, z) == label)
+					  	 	 			{
+					  	 	 			markersStack.setVoxel(x, y, z, 0);
+					  	 	 			}
+					  	 	 		}
+					  	 	 	}
+						}
+						
+				    	
+				    	IJ.log(""+imgStack.getVoxel(xi,yi,zi)+"");
+				    	markersImage.updateAndDraw();
+				    	updateResultOverlay();
+				    	IJ.log(""+xi+"  "+yi+"  "+zi+"");
+				    	IJ.log(""+ox+"  "+oy+" ");
+				    	IJ.log(""+markersImage.getPixel(xi,yi)+"");
+				    	
+				    }
+				};
+				
+				MouseMotionListener mlRemoveDragged = new MouseAdapter() {
+
+					java.util.List<Integer> list_value = new ArrayList<Integer>();
+				    @Override
+				    public void mouseDragged(MouseEvent eImg) {
+				    	IJ.log(""+eImg.getSource()+"");
+				    	int xi = eImg.getX();
+				    	int yi = eImg.getY();
+				    	int ox = imp.getWindow().getCanvas().offScreenX(xi);
+						int oy = imp.getWindow().getCanvas().offScreenY(yi);
+				    	int zi = displayImage.getCurrentSlice();
+				    	
+				    	list_value.add(ox,oy);
+				    	
+				    	ImageStack imgStack = resultImage.getStack();
+				    	ImageStack markersStack = markersImage.getStack();
+				    	//markersImage.setDefault16bitRange(16);
+				    	double label = imgStack.getVoxel(ox,oy,zi-1);
+				    	
+				    	int width = imgStack.getWidth();
+						int height = imgStack.getHeight();
+						int nSlices = imgStack.getSize();
+						int bitDepth = imgStack.getBitDepth() ;
+						for(int z = 0; z < nSlices; z++){  	 	 	
+					  	 	 	for (int y = 0; y <height; y++){
+					  	 	 		for (int x = 0; x < width; x++){
+					  	 	 			if(imgStack.getVoxel(x, y, z) == label)
+					  	 	 			{
+					  	 	 			markersStack.setVoxel(x, y, z, 0);
+					  	 	 			}
+					  	 	 		}
+					  	 	 	}
+						}
+						
+				    	
+				    	IJ.log(""+imgStack.getVoxel(xi,yi,zi)+"");
+				    	markersImage.updateAndDraw();
+				    	updateResultOverlay();
+				    	IJ.log(""+xi+"  "+yi+"  "+zi+"");
+				    	IJ.log(""+ox+"  "+oy+" ");
+				    	IJ.log(""+markersImage.getPixel(xi,yi)+"");
+				    	
+				    }
+				
+				};
+				
+				
+				MouseListener mlLocalChange = new MouseAdapter() {
+				    @Override
+				    public void mouseClicked(MouseEvent eImg) {
+				    	IJ.log(""+eImg.getSource()+"");
+				    	int xi = eImg.getX();
+				    	int yi = eImg.getY();
+				    	int ox = imp.getWindow().getCanvas().offScreenX(xi);
+						int oy = imp.getWindow().getCanvas().offScreenY(yi);
+				    	int zi = displayImage.getCurrentSlice();
+				    	
+				    	ImageStack imgStack = resultImage.getStack();
+				    	ImageStack rawStack = inputStackCopy;
+				    	ImageStack markersStack = markersImage.getStack();
+				    	//markersImage.setDefault16bitRange(16);
+				    	double label = imgStack.getVoxel(ox,oy,zi-1);
+				    	int width = imgStack.getWidth();
+						int height = imgStack.getHeight();
+						int nSlices = imgStack.getSize();
+						int bitDepth = imgStack.getBitDepth() ;
+						
+				    	ImagePlus imageLocal = IJ.createImage("local", width, height, nSlices, bitDepth) ;
+				    	imageLocal .setCalibration(imp.getCalibration());
+						ImageStack localStack = imageLocal .getStack();					
+						
+				    	
+				    	ArrayList<ArrayList<Integer>> coord = new ArrayList<ArrayList<Integer>>() ;
+				    	
+				    	IJ.log(""+coord.size()+"");
+						for(int z = 0; z < nSlices; z++){  	 	 	
+					  	 	 	for (int y = 0; y <height; y++){
+					  	 	 		for (int x = 0; x < width; x++){
+					  	 	 			if(imgStack.getVoxel(x, y, z) == label)
+					  	 	 			{
+					  	 	 				coord.add(new ArrayList<Integer>() );
+					  	 	 				coord.get(coord.size() -1).add(x);
+					  	 	 				coord.get(coord.size() -1).add(y);
+					  	 	 				coord.get(coord.size() -1).add(z);
+					  	 	 				localStack.setVoxel(x, y, z,rawStack.getVoxel(x, y, z));
+					  	 	 			}
+					  	 	 		}
+					  	 	 	}
+						}
+						
+						
+						// read connectivity
+						int readConn = Integer.parseInt( (String) connectivityList.getSelectedItem() );
+
+						// convert connectivity to 3D if needed (2D images are processed as 3D)
+						if( inputIs2D )
+							readConn = readConn == 4 ? 6 : 26;
+						
+						final int connectivity = readConn;
+						
+						// read dynamic
+						final double dynamic;
+						try{
+							dynamic = Double.parseDouble( dynamicText.getText() );
+						}
+						catch( NullPointerException ex )
+						{
+							IJ.error( "Morphological Sementation", "ERROR: missing dynamic value" );
+							return;
+						}
+						catch( NumberFormatException ex )
+						{
+							IJ.error( "Morphological Sementation", "ERROR: dynamic value must be a number" );
+							return;
+						}
+
+						// Run extended minima
+						ImageStack regionalMinima = MinimaAndMaxima3D.extendedMinimaDouble( localStack, dynamic, connectivity );
+/*
+						for(int z = 0; z < nSlices; z++){  	 	 	
+							for (int y = 0; y <height; y++){
+								for (int x = 0; x < width; x++){
+									if(localStack.getVoxel(x, y, z) !=0 )
+									{
+										markersStack.setVoxel(x, y, z,localStack.getVoxel(x, y, z));
+									}
+								}
+							}
+						}*/
+						
+						if(spreadingMarkers)
+						{
+							for(int i = 0; i< coord.size();i++)
+							{
+								int x = coord.get(i).get(0);
+								int y = coord.get(i).get(1);
+								int z = coord.get(i).get(2);
+								if(regionalMinima.getVoxel(x, y, z) !=0 )
+								{
+									markersStack.setVoxel(x, y, z,regionalMinima.getVoxel(x, y, z));
+									markersStack.setVoxel(x+1, y, z,regionalMinima.getVoxel(x, y, z));
+									markersStack.setVoxel(x, y+1, z,regionalMinima.getVoxel(x, y, z));
+									markersStack.setVoxel(x, y, z+1,regionalMinima.getVoxel(x, y, z));
+									markersStack.setVoxel(x-1, y, z,regionalMinima.getVoxel(x, y, z));
+									markersStack.setVoxel(x, y-1, z,regionalMinima.getVoxel(x, y, z));
+									markersStack.setVoxel(x, y, z-1,regionalMinima.getVoxel(x, y, z));
+								}
+							}
+						}
+						else
+						{
+
+							for(int i = 0; i< coord.size();i++)
+							{
+								int x = coord.get(i).get(0);
+								int y = coord.get(i).get(1);
+								int z = coord.get(i).get(2);
+								if(regionalMinima.getVoxel(x, y, z) !=0 )
+								{
+									markersStack.setVoxel(x, y, z,regionalMinima.getVoxel(x, y, z));
+								}
+							}
+						}
+
+						IJ.log(""+imgStack.getVoxel(xi,yi,zi)+"");
+				    	markersImage.updateAndDraw();
+				    	updateResultOverlay();
+				    	IJ.log(""+xi+"  "+yi+"  "+zi+"");
+				    	IJ.log(""+ox+"  "+oy+" ");
+				    	IJ.log(""+markersImage.getPixel(xi,yi)+"");
+				    	
+				    }
+				};
+				
+				MouseListener mlSyn = new MouseAdapter() {
+					@Override
+					public void mouseClicked(MouseEvent eImg) {
+											
+						int xc = eImg.getX();
+						int yc = eImg.getY();
+						
+						// get ImageCanvas that received event
+						ImageCanvas icc = (ImageCanvas) eImg.getSource();
+
+						int zc = icc.getImage().getCurrentSlice();
+						int ox = icc.offScreenX(xc);
+						int oy = icc.offScreenY(yc);
+						int[] newCoord = new int[3];
+
+						// to keep ImageJ from freezing when a mouse event is processed on exit
+						if (IJ.getInstance().quitting()) {
+							return;
+						}
+
+						if (reslicedImage != null) {
+							if(reslicedImage.getCanvas() == icc) {
+								newCoord = getMatchingCoords( icc, ox, oy , zc);
+								if (addMarkers)
+								{
+									markersImage.getStack().setVoxel(newCoord[0],newCoord[1],newCoord[2], 255);	
+								}
+								else if (removeMarkers)
+								{
+									markersImage.getStack().setVoxel(newCoord[0],newCoord[1],newCoord[2], 0);
+								}
+							}
+							//	if (cCoords.getState()) {
+							
+								//ic.mouseClicked(adaptEvent(e, ic, p));
+							
+						}
+						storeCanvasState(icc);
+					}	
+					
+				};
+				
+				MouseWheelListener mlSynWheel = new MouseAdapter() {
+					@Override
+					public void mouseWheelMoved(final MouseWheelEvent eWheel) {	
+
+
+						if (reslicedImage.getWindow() == null) return;
+						ImagePlus imp;
+
+						ImageCanvas ic;
+
+						//Point p;
+						//Point oldp;
+						int p[]= new int[3];
+						int oldp[]= new int[3];
+						Rectangle rect;
+						oldZMouse = zMouse;
+						rect = boundingRect(xMouse,yMouse,oldXMouse,oldYMouse);
+
+
+						ImageCanvas icc = (ImageCanvas) eWheel.getSource();
+						zMouse = icc.getImage().getSlice();
+						imp = reslicedImage;
+						if (imp != null) {
+							ic = imp.getCanvas();
+							if ( ic != icc) //case : mouse in plugin window 
+							{
+								p = getMatchingCoords( icc, xMouse, yMouse, zMouse);		
+								IJ.log("p newCoordF = " +p[0]+"   "+p[1]+"   "+p[2]+"");
+								oldp = getMatchingCoords( icc, oldXMouse, oldYMouse, oldZMouse);
+								IJ.log("oldp newCoordF = " +oldp[0]+"   "+oldp[1]+"   "+oldp[2]+"");
+								if (0>p[0] || p[0]>reslicedImage.getDimensions()[0] || 
+										0>p[1] || p[1]>reslicedImage.getDimensions()[1] ||
+										0>p[2] || p[2]>reslicedImage.getDimensions()[3] )
+								{
+									ic.getImage().setZ(p[2]); /// A MODIFIER !!!! setPosition
+									imp.updateAndDraw();
+									rect = boundingRect(p[0], p[1], oldp[0], oldp[1]);
+								}
+
+							} 
+							else //case : mouse in resliced image window 
+							{
+								p[0] = xMouse;
+								p[1] = yMouse;
+								p[2] = zMouse;
+								//displayImage.setZ(p[2]); /// A MODIFIER !!!! Position
+								rect = boundingRect(xMouse,yMouse,oldXMouse,oldYMouse);
+
+							}
+
+							// For PolygonRoi the cursor would overwrite the indicator lines.
+							Roi roi = imp.getRoi();
+							if (! (roi != null  && roi.getState() == Roi.CONSTRUCTING) ) { //&& roi instanceof PolygonRoi
+								drawSyncCursor(ic,rect, p[0], p[1]);
+							}							
+						}
+
+						// second image 
+						if (IJ.getInstance().quitting()) {return;}
+						imp = displayImage;
+						if (imp != null) {
+
+							ic = imp.getCanvas();
+							if ( ic != icc)  //case : mouse in resliced image window
+							{ 
+								p = getMatchingCoords( icc, xMouse, yMouse, zMouse);
+								IJ.log("p newCoordF = " +p[0]+"   "+p[1]+"   "+p[2]+"");
+								oldp = getMatchingCoords( icc, oldXMouse, oldYMouse, oldZMouse);
+								
+								imp.setZ(p[2]);
+								imp.updateAndDraw();
+								updateResultOverlay();
+								rect = boundingRect(p[0], p[1], oldp[0], oldp[1]);
+							} else //case : mouse in plugin window
+							{
+								p[0] = xMouse;
+								p[1] = yMouse;
+								p[2] = zMouse;
+
+								rect = boundingRect(xMouse,yMouse,oldXMouse,oldYMouse);
+
+							}
+							// For PolygonRoi the cursor would overwrite the indicator lines.
+							Roi roi = imp.getRoi();
+							if (! (roi != null && roi.getState() == Roi.CONSTRUCTING) ) { // && roi instanceof PolygonRoi
+								drawSyncCursor(ic,rect,  p[0], p[1]);
+							}
+							
+						}
+
+						storeCanvasState(icc);
+					}
+
+				};
+				
+				// --------------------------------------------------
+				/** Propagate mouse entered events to all synchronized windows. */
+				/*MouseListener mlSynEnter = new MouseAdapter() {
+					@Override
+					public void mouseEntered(MouseEvent e) {
+						if (reslicedImage.getWindow() == null) return;
+					ImagePlus imp;
+					ImageWindow iw;
+					ImageCanvas ic;
+					int p[]= new int[3];
+					xMouse = eImg.getX();
+					yMouse = eImg.getY();
+					ImageCanvas icc = (ImageCanvas) eImg.getSource();
+					zMouse = icc.getImage().getSlice();
+					p[0] = xMouse;
+					p[1] = yMouse;
+					p[2] = zMouse;
+					// get ImageCanvas that received event
+					ImageCanvas icc = (ImageCanvas) e.getSource();
+					ImageWindow iwc = (ImageWindow) icc.getParent();
+					for(int n=0; n<vwins.size();++n) {
+						// to keep ImageJ from freezing when a mouse event is processed on exit
+						if (ijInstance.quitting()) {
+							return;
+						}
+						imp = getImageFromVector(n);
+						if (imp != null) {
+							iw = imp.getWindow();
+							if(iw != iwc) {
+								ic = iw.getCanvas();
+								if (cCoords.getState()) {
+									p = getMatchingCoords(ic, icc, x, y);
+								}
+								ic.mouseEntered(adaptEvent(e, ic, p));
+							}
+						}
+					}
+					// Store srcRect, Magnification and others of current ImageCanvas
+					storeCanvasState(icc);
+				}
+				};*/
+				
+				void changeOfBase()
+				{
+					
+					Roi roi = displayImage.getRoi();
+					IJ.log(""+roi+"");
+					if (roi == null) {return;}
+					int roiType = roi.getType();
+					int reslicedZ = reslicedImage.getStack().getSize();
+					
+					
+					double x1 = 0, x2 = 0, y1 = 0, y2 = 0,xInc = 0.0, yInc = 0.0;
+					double outputZSpacing = 1.0;
+					
+					
+					if (roiType == Roi.LINE) {
+					Line lineRoi = (Line) roi;
+					origine[0] = lineRoi.x1d;
+					origine[1] = lineRoi.y1d;
+					origine[2] = 1;
+					x2 = lineRoi.x2d;
+					y2 = lineRoi.y2d;
+					double dx = x2 - origine[0];
+					double dy = y2 - origine[1];
+					double nrm = Math.sqrt(dx*dx + dy*dy)/outputZSpacing;
+					xInc = -(dy/nrm);
+					yInc = (dx/nrm);
+					IJ.log(""+ reslicedImage.getDimensions().length+" "+ reslicedImage.getDimensions()[0]+" "+ reslicedImage.getDimensions()[1]+" "+ reslicedImage.getDimensions()[3]+" display dim 3 = " +displayImage.getDimensions()[3]+"");//(width, height, nChannels, nSlices, nFrames) 
+					double pointsResliced[][] = new double[][] {{reslicedImage.getDimensions()[0],0,0},{0, reslicedImage.getDimensions()[1],0 },{0, 0, reslicedImage.getDimensions()[3]}}; // {{x1,x2,x3},{y1,y2,y3},{z1,z2,z3}}
+					double pointsInit[][] = new double[][] {{dx,0,reslicedZ*xInc},{dy,0,reslicedZ*yInc},{0,displayImage.getDimensions()[3],0}}; 
+					
+					IJ.log(" "+ pointsResliced[0][0] + " "+ pointsResliced[0][1] + " "+ pointsResliced[0][2] + " \n"+ pointsResliced[1][0] + " "+ pointsResliced[1][1] + " "+ pointsResliced[1][2] + "\n "+ pointsResliced[2][0] + " "+ pointsResliced[2][1] + " "+ pointsResliced[2][2] + " ");
+					IJ.log(" "+pointsInit[0][0] +" "+pointsInit[0][1] +" "+pointsInit[0][2] +"\n "+pointsInit[1][0] +" "+pointsInit[1][1] +" "+pointsInit[1][2] +" \n"+pointsInit[2][0] +" "+pointsInit[2][1] +" "+pointsInit[2][2] +" ");
+					double A[][] = multiply(pointsResliced,invertG(pointsInit));
+					
+					double Ainv[][] = invertG(A);
+					IJ.log("Ainv =  "+ Ainv[0][0] + " "+ Ainv[0][1] + " "+ Ainv[0][2] + " \n"+ Ainv[1][0] + " "+ Ainv[1][1] + " "+ Ainv[1][2] + "\n "+ Ainv[2][0] + " "+ Ainv[2][1] + " "+ Ainv[2][2] + " ");
+					IJ.log("A = "+A[0][0] + " "+ A[0][1] + " "+ A[0][2] + " \n"+ A[1][0] + " "+ A[1][1] + " "+ A[1][2] + "\n "+ A[2][0] + " "+ A[2][1] + " "+ A[2][2] + " ");
+					
+					
+					coordResliceToRaw = Ainv ; // matrice to obtain Row coordinates from Reslice coordinates Ainv*Csync =  Csegm
+					coordRawToReslice = A; // matrice to obtain Reslice coordinates from Row coordinates  A*Csegm = Csync
+					}
+				}
+				
+				double[][] multiply(double first[][], double second[][] )
+				{
+					
+					int m = first.length,n = first[0].length;
+					int p = second.length,q = second[0].length;
+					
+					double sum = 0; 
+					double multiply[][] = new double[m][q];
+					for (int c = 0 ; c < m ; c++ )
+			         {
+						for (int d = 0 ; d < q ; d++ )
+						{   
+							for (int k = 0 ; k < p ; k++ )
+							{
+								sum = sum + first[c][k]*second[k][d];
+							}
+
+							multiply[c][d] = sum;
+							sum = 0;
+						}
+			         }
+					return multiply;
+				}
+				
+			    /**http://www.cs.nyu.edu/~jeremy/atmm/BlockPolly/render/Matrix.java
+			       Copies the contents of the source matrix to the destination matrix.
+			       @param src original source matrix
+			       @param dst target destination matrix
+			    */
+			   public void copy(double src[][], double dst[][]) {
+			      for (int i = 0 ; i < src.length ; i++)
+			      for (int j = 0 ; j < src[i].length ; j++)
+			         dst[i][j] = src[i][j];
+			   }
+			   
+				   public double[][] invert(double matSource[][]) {
+					      int N = matSource.length;
+					      double t;
+					      double[][] tmp = new double[N][N];
+					      double[][] mat = new double[N][N];
+					      copy(matSource, mat);
+					      identity(tmp);
+					      for (int i = 0; i < N ; i++) {
+					         if ((t = mat[i][i]) == 0)
+					            break;
+					         for (int j = 0; j < N ; j++) {
+					            mat[i][j] = mat[i][j] / t;
+					            tmp[i][j] = tmp[i][j] / t;
+					         }
+					         for (int k = 0; k < N ; k++)
+						    if (k != i) {
+						       t = mat[k][i];
+						       for (int j = 0; j < N ; j++) {
+						          mat[k][j] = mat[k][j] - t*mat[i][j];
+						          tmp[k][j] = tmp[k][j] - t*tmp[i][j];
+					               }
+						    }
+					      }
+					      IJ.log("tmp = "+tmp[0][0] + " "+ tmp[0][1] + " "+ tmp[0][2] + " \n"+ tmp[1][0] + " "+ tmp[1][1] + " "+ tmp[1][2] + "\n "+ tmp[2][0] + " "+ tmp[2][1] + " "+ tmp[2][2] + " ");
+							
+					      return tmp;
+					   }
+				   public void identity(double dst[][]) {
+					      for (int i = 0 ; i < dst.length ; i++)
+					      for (int j = 0 ; j < dst.length ; j++)
+					         dst[i][j] = (i == j ? 1 : 0);
+					   }
+				   
+				//  function for invert a matrice  from http://www.sanfoundry.com/java-program-find-inverse-matrix/
+			    public double[][] invertG(double a[][]) 
+
+			    {
+			        int n = a.length;
+			        double X[][] = new double[n][n];
+			        double b[][] = new double[n][n];
+			        int index[] = new int[n];
+			        for (int i=0; i<n; ++i) 
+			            b[i][i] = 1;
+			 
+			 // Transform the matrix into an upper triangle
+			        gaussian(a, index);			 
+			        //IJ.log(" a = "+a[0][0]+ " "+a[0][1]+ " "+a[0][2]+ " \n"+a[1][0]+ " "+a[1][1]+ " "+a[1][2]+ " \n "+a[2][0]+ " "+a[2][1]+ " "+a[2][2]+ " ");
+			        
+			 // Update the matrix b[i][j] with the ratios stored
+			        for (int i=0; i<n-1; ++i){
+			            for (int j=i+1; j<n; ++j){
+			                for (int k=0; k<n; ++k){
+			                    b[index[j]][k]-= a[index[j]][i]*b[index[i]][k];
+			        			}
+			            }
+			        }
+			        //IJ.log("b = "+b[0][0]+ " "+b[0][1]+ " "+b[0][2]+ " \n"+b[1][0]+ " "+b[1][1]+ " "+b[1][2]+ " \n "+b[2][0]+ " "+b[2][1]+ " "+b[2][2]+ " ");
+			        
+			 // Perform backward substitutions
+			        for (int i=0; i<n; ++i) 
+			        {
+			            X[n-1][i] = b[index[n-1]][i]/a[index[n-1]][n-1];
+			            //IJ.log("X = "+X[0][0]+ " "+X[0][1]+ " "+X[0][2]+ " \n"+X[1][0]+ " "+X[1][1]+ " "+X[1][2]+ " \n "+X[2][0]+ " "+X[2][1]+ " "+X[2][2]+ " ");
+				        
+			            for (int j=n-2; j>=0; --j) 
+			            {
+			                X[j][i] = b[index[j]][i];
+			                for (int k=j+1; k<n; ++k) 
+			                {
+			                	//IJ.log(""+ i +" "+ j +" "+ k +"");
+			                    X[j][i] -= a[index[j]][k]*X[k][i];
+			                }
+			                //IJ.log(" a division = "+ a[index[j]][j] +"");
+			                X[j][i] /= a[index[j]][j];
+			                
+			            }
+			        }
+			        return X;
+			    }
+			 
+			// Method to carry out the partial-pivoting Gaussian
+			// elimination.  Here index[] stores pivoting order.
+			    public void gaussian(double a[][], int index[]) 
+			    {
+			        int n = index.length;
+			        double c[] = new double[n];			 
+			 // Initialize the index
+			        for (int i=0; i<n; ++i) 
+			            index[i] = i;			
+			 // Find the rescaling factors, one from each row
+			        for (int i=0; i<n; ++i) 
+			        {
+			            double c1 = 0;
+			            for (int j=0; j<n; ++j) 
+			            {
+			                double c0 = Math.abs(a[i][j]);
+			                if (c0 > c1) c1 = c0;
+			            }
+			            c[i] = c1;
+			        }
+			 // Search the pivoting element from each column
+			        int k = 0;
+			        for (int j=0; j<n-1; ++j) 
+			        {
+			            double pi1 = 0;
+			            for (int i=j; i<n; ++i) 
+			            {
+			                double pi0 = Math.abs(a[index[i]][j]);
+			                //IJ.log("  "+ c[index[i]] +"");
+			                pi0 /= c[index[i]];
+			                if (pi0 > pi1) 
+			                {
+			                    pi1 = pi0;
+			                    k = i;
+			                }
+			            }
+			   // Interchange rows according to the pivoting order
+			            int itmp = index[j];
+			            index[j] = index[k];
+			            index[k] = itmp;
+			            for (int i=j+1; i<n; ++i) 	
+			            {
+			            	//IJ.log(" div a gaussian "+ a[index[j]][j] +"");
+			                double pj = a[index[i]][j]/a[index[j]][j];	 
+			 // Record pivoting ratios below the diagonal
+			                a[index[i]][j] = pj;			 
+			 // Modify other elements accordingly
+			                for (int l=j+1; l<n; ++l)
+			                    a[index[i]][l] -= pj*a[index[j]][l];
+			            }
+			        }
+			    }
+				
+	 //--> end from http://www.sanfoundry.com/java-program-find-inverse-matrix/
+
+				MouseMotionListener mmlSyn = new MouseAdapter() {
+					@Override
+					public void mouseMoved(MouseEvent eImg) {						
+						IJ.log(""+eImg.getModifiers()+"");
+						
+						if(eImg.getModifiers() == 2 || eImg.getModifiers() == 20)
+						{
+							return;
+						}
+						if (reslicedImage.getWindow() == null) return;
+							ImagePlus imp;
+							ImageCanvas ic;
+							ImageCanvas icc = (ImageCanvas) eImg.getSource();
+							//Point p;
+							//Point oldp;
+							
+							Rectangle rect;
+							oldXMouse = xMouse; oldYMouse = yMouse; oldZMouse = zMouse;
+							xMouse = eImg.getX();
+							yMouse = eImg.getY();
+							/*
+							 * xMouse = icc.offScreenX(eImg.getX());
+							yMouse = icc.offScreenY(eImg.getY());
+
+							 */
+
+							//p = new Point(x, y);
+							rect = boundingRect(xMouse,yMouse,oldXMouse,oldYMouse);
+							// get ImageCanvas that received event
+
+							/*
+						if( icc == displayImage.getCanvas())
+						{
+							 iwc = (ImageWindow) icc.getParent().getParent();
+
+						}
+						else
+						{
+							iwc = (ImageWindow) icc.getParent();
+						}*/
+							zMouse = icc.getImage().getSlice();
+							// Draw new cursor box in each synchronized window.
+							// and pass on mouse moved event
+
+
+							// first image
+							// to keep ImageJ from freezing when a mouse event is processed on exit
+							if (IJ.getInstance().quitting()) { return; }
+							imp = reslicedImage;
+							if (imp != null) {
+								ic = imp.getCanvas();
+								if ( ic != icc) //case : mouse in plugin window 
+								{
+									p = getMatchingCoords( icc, xMouse, yMouse, zMouse);		
+									IJ.log("p newCoordF = " +p[0]+"   "+p[1]+"   "+p[2]+"");
+									oldp = getMatchingCoords( icc, oldXMouse, oldYMouse, oldZMouse);
+									IJ.log("oldp newCoordF = " +oldp[0]+"   "+oldp[1]+"   "+oldp[2]+"");
+									if (0>p[0] || p[0]>reslicedImage.getDimensions()[0] || 
+											0>p[1] || p[1]>reslicedImage.getDimensions()[1] ||
+											0>p[2] || p[2]>reslicedImage.getDimensions()[3] )
+									{
+										ic.getImage().setZ(p[2]); /// A MODIFIER !!!! setPosition
+										imp.updateAndDraw();
+										rect = boundingRect(p[0], p[1], oldp[0], oldp[1]);
+									}
+
+								} 
+								else //case : mouse in resliced image window 
+								{
+									p[0] = xMouse;
+									p[1] = yMouse;
+									p[2] = zMouse;
+									//displayImage.setZ(p[2]); /// A MODIFIER !!!! Position
+									rect = boundingRect(xMouse,yMouse,oldXMouse,oldYMouse);
+
+								}
+
+								// For PolygonRoi the cursor would overwrite the indicator lines.
+								//Roi roi = imp.getRoi();
+								//if (! (roi != null  && roi.getState() == Roi.CONSTRUCTING) ) { //&& roi instanceof PolygonRoi
+									drawSyncCursor(ic,rect, p[0], p[1]);
+								//}
+								/*if(ic != icc)
+									ic.mouseMoved(adaptEvent(eImg, ic, p));*/
+							}
+
+							// second image 
+							if (IJ.getInstance().quitting()) {return;}
+							imp = displayImage;
+							if (imp != null) {
+
+								ic = imp.getCanvas();
+								if ( ic != icc)  //case : mouse in resliced image window
+								{ 
+									p = getMatchingCoords( icc, icc.offScreenX(xMouse), icc.offScreenY(yMouse), zMouse);
+									IJ.log("p newCoordF = " +p[0]+"   "+p[1]+"   "+p[2]+"");
+									oldp = getMatchingCoords( icc, icc.offScreenX(oldXMouse), icc.offScreenY(oldYMouse), oldZMouse);
+									imp.setZ(p[2]);
+									imp.updateAndDraw();
+									updateResultOverlay();
+									rect = boundingRect(p[0], p[1], oldp[0], oldp[1]);
+								} else //case : mouse in plugin window
+								{
+									p[0] = xMouse;
+									p[1] = yMouse;
+									p[2] = zMouse;
+
+									rect = boundingRect(xMouse,yMouse,oldXMouse,oldYMouse);
+
+								}
+								// For PolygonRoi the cursor would overwrite the indicator lines.
+								//Roi roi = imp.getRoi();
+								//if (! (roi != null && roi.getState() == Roi.CONSTRUCTING) ) { // && roi instanceof PolygonRoi
+									drawSyncCursor(ic,rect,  p[0], p[1]);
+								//}
+								/*if(ic != icc)
+									ic.mouseMoved(adaptEvent(eImg, ic, p));*/
+							}
+
+							// Display correct values in ImageJ statusbar
+							//icc.getImage().mouseMoved(icc.offScreenX(xMouse), icc.offScreenY(yMouse));
+							
+
+							storeCanvasState(icc);
+						}
+					
+
+				};
+				
+				
+				// --------------------------------------------------
+				/**
+				 * Method to pass on changes of the z-slice of a stack.
+				 * pb : http://stackoverflow.com/questions/11924736/how-to-use-classes-in-referenced-libraries-in-eclipse
+				 */
+				/* public void displayChanged(DisplayChangeEvent e) {
+					if (vwins == null) return;
+					Object source = e.getSource();
+					int type = e.getType();
+					int value = e.getValue();
+					ImagePlus imp;
+					ImageWindow iw;
+					// Current imagewindow
+					ImageWindow iwc = WindowManager.getCurrentImage().getWindow();
+					// pass on only if event comes from current window
+					if (!iwc.equals(source)) return;
+					// Change slices in other synchronized windows.
+					if(cSlice.getState() && type==DisplayChangeEvent.Z) {
+						for(int n=0; n<vwins.size();++n) {
+							imp = getImageFromVector(n);
+							if (imp != null) {
+								iw = imp.getWindow();
+								int stacksize = imp.getStackSize();
+								if( !iw.equals(source) && (iw instanceof StackWindow) ) {
+									((StackWindow)iw).setPosition(imp.getChannel(), value, imp.getFrame());
+								}
+							}
+						}
+					}
+			
+					// Store srcRect, Magnification and others of current ImageCanvas
+					ImageCanvas icc = iwc.getCanvas();
+					storeCanvasState(icc);
+				}*/
+
+				
+				// --------------------------------------------------
+
+				/** Store srcRect and Magnification of the currently active ImageCanvas ic */
+				private void storeCanvasState(ImageCanvas ic) {
+					currentMag = ic.getMagnification();
+					currentSrcRect = new Rectangle(ic.getSrcRect());
+				}
+
+				/** Get Screen Coordinates for ImageCanvas ic matching
+				 * the OffScreen Coordinates of the current ImageCanvas.
+				 * (srcRect and magnification stored after each received event.)
+				 * Input: The target ImageCanvas, the current ImageCanvas,
+				 * x-ScreenCoordinate for current Canvas, y-ScreenCoordinate for current Canvas
+				 * If the "ImageScaling" checkbox is selected, Scaling and Offset
+				 * of the images are taken into account. */
+				int[] getMatchingCoords(ImageCanvas icc, int xc, int yc, int zc) {
+
+					double newCoord[][] ;
+					double coord[][] = new double[][] {{xc},{yc},{zc}};
+					int xnew,ynew;
+					if (icc == reslicedImage.getCanvas()) //"si event sur le resliced"
+					{
+						newCoord = multiply(coordResliceToRaw,coord);
+						IJ.log(" newCoord pour segm = " +newCoord[0][0]+"   "+newCoord[1][0]+"   "+newCoord[2][0]+"");
+						newCoord[0][0] = newCoord[0][0]+ origine[0];
+						newCoord[1][0] = newCoord[1][0]+ origine[1];
+						newCoord[2][0] = newCoord[2][0]+ origine[2];
+						double xOffScreen = currentSrcRect.x + (newCoord[0][0]/currentMag);
+						double yOffScreen = currentSrcRect.y + (newCoord[1][0]/currentMag);
+						xnew = displayImage.getCanvas().screenXD(xOffScreen);
+						ynew = displayImage.getCanvas().screenYD(yOffScreen);
+					}
+					else
+					{
+						coord[0][0] = coord[0][0]- origine[0];
+						coord[1][0] = coord[1][0]- origine[1];
+						coord[2][0] = coord[2][0]- origine[2];
+						newCoord = multiply(coordRawToReslice,coord);
+						IJ.log(" newCoord pour resliced = " +newCoord[0][0]+"   "+newCoord[1][0]+"   "+newCoord[2][0]+"");
+						
+						double xOffScreen = currentSrcRect.x + (newCoord[0][0]/currentMag);
+						double yOffScreen = currentSrcRect.y + (newCoord[1][0]/currentMag);
+						xnew = reslicedImage.getCanvas().screenXD(xOffScreen);
+						ynew = reslicedImage.getCanvas().screenYD(yOffScreen);
+					}
+					
+					
+					/*if (cScaling.getState()) {
+						Calibration cal = ((ImageWindow)ic.getParent()).getImagePlus().getCalibration();
+						Calibration curCal = ((ImageWindow)icc.getParent()).getImagePlus().getCalibration();
+						xOffScreen = ((xOffScreen-curCal.xOrigin)*curCal.pixelWidth)/cal.pixelWidth+cal.xOrigin;
+						yOffScreen = ((yOffScreen-curCal.yOrigin)*curCal.pixelHeight)/cal.pixelHeight+cal.yOrigin;
+					}*/
+					
+					
+					return new int[] {xnew,ynew,(int)newCoord[2][0]};
+				}
+				
+				void drawSyncCursor(ImageCanvas ic, Rectangle rect,
+						int xc, int yc) {					
+					
+					int SZ = 16/2;
+					int xpSZ = xc+SZ;
+					int xmSZ = xc-SZ;
+					int ypSZ = yc+SZ;
+					int ymSZ = yc-SZ;
+					int xp2 = xc+2;
+					int xm2 = xc-2;
+					int yp2 = yc+2;
+					int ym2 = yc-2;
+					Graphics g = ic.getGraphics();
+					try {
+						g.setClip(rect.x,rect.y,rect.width,rect.height);
+						ic.paint(g);
+						g.setColor(Color.red);
+						// g.drawRect(x-SZ,y-SZ,RSZ,RSZ);
+						g.drawLine(xmSZ, ymSZ, xm2, ym2);
+						g.drawLine(xpSZ, ypSZ, xp2, yp2);
+						g.drawLine(xpSZ, ymSZ, xp2, ym2);
+						g.drawLine(xmSZ, ypSZ, xm2, yp2);
+					}
+					finally {
+						// free up graphics resources
+						g.dispose();
+					}
+				}
+				
+				 // --------------------------------------------------
+				/** Makes a new mouse event from MouseEvent e with the Canvas c
+				* as source and the coordinates of Point p as X and Y.*/
+				private MouseEvent adaptEvent(MouseEvent e, Canvas c, int[] p) {
+					return new MouseEvent(c, e.getID(), e.getWhen(), e.getModifiers(),
+							p[0], p[1], e.getClickCount(), e.isPopupTrigger());
+				}
+				// --------------------------------------------------
+				/** Compute bounding rectangle given current and old cursor
+				locations. This is used to determine what part of image to
+				redraw. */
+				protected Rectangle boundingRect(int xMouse, int yMouse,
+						int oldXMouse, int oldYMouse) {
+					int SZ = 16/2;
+					int SCALE = 3;
+					int dx = Math.abs(oldXMouse - xMouse)/2;
+					int dy = Math.abs(oldYMouse - yMouse)/2;
+					int xOffset = dx + SCALE * SZ;
+					int yOffset = dy + SCALE * SZ;
+					int xCenter = (xMouse + oldXMouse)/2;
+					int yCenter = (yMouse + oldYMouse)/2;
+					int xOrg = Math.max(xCenter - xOffset,0);
+					int yOrg = Math.max(yCenter - yOffset,0);
+					int w = 2 * xOffset;
+					int h = 2 * yOffset;
+					return new Rectangle(xOrg, yOrg, w, h);
+				}
+				
+				//end add
 	}// end class CustomWindow
 
 
@@ -1437,6 +3032,7 @@ public class MorphologicalSegmentation implements PlugIn {
 	@Override
 	public void run(String arg0) 
 	{
+		ij.io.LogStream.redirectSystem(true); 
 		if ( IJ.getVersion().compareTo("1.48a") < 0 )
 		{
 			IJ.error( "Morphological Segmentation", "ERROR: detected ImageJ version " + IJ.getVersion()  
@@ -1492,6 +3088,297 @@ public class MorphologicalSegmentation implements PlugIn {
 
 	}
 
+	//add by elise
+
+
+		public ImagePlus AskForAnotherImage(){
+			
+			ImagePlus oldImage = null;	
+			// inspiration from :http://fiji.sc/Javascript_Scripting
+			int[] wList = WindowManager.getIDList();
+	  
+			//get all the image titles so they can be shown in the dialog
+			int nImages = WindowManager.getImageCount();
+			String titles[] = new String[nImages+2]; // int newLabels[] =new int[nLabels+1];
+			titles[0]= "load marker Image";
+			
+			for (int i=0, k=1; i<wList.length; i++) {
+			    ImagePlus limp = WindowManager.getImage(wList[i]);
+			    if (null != limp)
+			      titles[k++] = limp.getTitle(); 
+				}
+			
+			titles[nImages+1]= "load labeled Image";
+			
+			GenericDialog gd = new GenericDialog("New Image");
+			gd.addMessage("Select the raw image");			
+			gd.addChoice("Image :", titles, "load image");
+			gd.showDialog();
+			
+			if (gd.wasCanceled())
+			    return null;
+			
+			int choiceIndex = gd.getNextChoiceIndex();	
+			System.out.print("parmis les "+titles.length+" possibilitées");
+			System.out.print( "" + choiceIndex + " choisi" );
+			
+			if (choiceIndex == 0)
+				{
+					oldImage = IJ.openImage();
+					if (null == oldImage) return null; // user canceled open dialog
+				}
+			else if (choiceIndex == titles.length-1)
+			{
+				oldImage = IJ.openImage();
+				
+				if (null == oldImage) return null; // user canceled open dialog
+				
+				oldImage = labeledImage_to_Markers(oldImage);
+			}
+			else
+				oldImage =  WindowManager.getImage(wList[choiceIndex-1]); // -1 parce que l'indexe zeros n'est pas une image
+		return oldImage;
+		}
+
+		public final static ImagePlus labeledImage_to_Markers(ImagePlus imp){
+			ImageStack img = imp.getStack();
+			int width = img.getWidth();
+			int height = img.getHeight();
+			int nSlices = img.getSize();
+			int bitDepth = img.getBitDepth() ;
+			
+			int nb_save = 0 ;
+			int nb_foundLabel = 0;
+
+			java.util.List<Integer> list_labels = new ArrayList<Integer>();
+			java.util.List<ArrayList<ArrayList<Integer>>> list_coordinates = new ArrayList<ArrayList<ArrayList<Integer>>>();
+			java.util.List<ArrayList<Integer>> list_min = new ArrayList<ArrayList<Integer>>();
+			java.util.List<ArrayList<Integer>> list_max = new ArrayList<ArrayList<Integer>>();
+			
+			
+			ImagePlus imp_markers = IJ.createImage("markers", width, height, nSlices, bitDepth) ;
+			imp_markers.setCalibration(imp.getCalibration());
+			ImageStack img_markers = imp_markers.getStack();
+						
+			for(int z = 0; z < nSlices; z++){  	 	 	
+		  	 	 	for (int y = 0; y <height; y++){
+		  	 	 		for (int x = 0; x < width; x++){
+		  	 	 			IJ.log(  "  " + x + "  ");
+		  	 	 			img_markers.setVoxel(x,  y,  z,  0);
+		  	 	 			nb_foundLabel = list_labels.size();
+		  	 	 			ArrayList<Integer>  newCoordinates = new ArrayList<Integer>();
+		  	 	 			newCoordinates.add(x);
+		  	 	 			newCoordinates.add(y);
+		  	 	 			newCoordinates.add(z);
+		  	 	 			int Flag_In = 0 ;
+		  	 	 			if(img.getVoxel(x, y, z) == 0) continue;
+		  	 	 			else if ( list_labels.size() != 0) {
+		  	 	 				for (int i = 0 ; i< nb_foundLabel;i++){
+		  	 	 					if (img.getVoxel(x, y, z) == list_labels.get(i)){
+		  	 	 						Flag_In = 1 ; 
+		  	 	 						 //System.out.println(list_coordinates.size());
+		  	 	 						 //System.out.println(i);
+		  	 	 						list_coordinates.get(i).add(newCoordinates);
+		  	 	 						if (x<list_min.get(i).get(0)) { list_min.get(i).set(0,x);}
+		  	 	 						else if (x>list_max.get(i).get(0)) {list_max.get(i).set(0,x);}
+
+		  	 	 						if (y<list_min.get(i).get(1)) { list_min.get(i).set(1,y);}
+		  	 	 						else if (y>list_max.get(i).get(1)) {list_max.get(i).set(1,y);}
+
+		  	 	 						if (z<list_min.get(i).get(2)) { list_min.get(i).set(2,z);}
+		  	 	 						else if (z>list_max.get(i).get(2)) {list_max.get(i).set(2,z);}
+		  	 	 					}
+		  	 	 				}
+		  	 	 			}
+		  	 	 			if ( Flag_In == 0){
+		  	 	 				
+		  	 	 			
+		  	 	 				list_labels.add((int)img.getVoxel(x, y, z));
+
+		  	 	 				// coordonnees and min max initialization
+		  	 	 				ArrayList<ArrayList<Integer>> coordinate_list = new ArrayList<ArrayList<Integer>>();
+		  	 	 				coordinate_list.add(newCoordinates);
+		  	 	 				list_coordinates.add(coordinate_list);
+								list_min.add(newCoordinates);
+		  	 	 				list_max.add(newCoordinates);
+		  	 	 			}
+		  	 	 		}
+		  	 	 	}
+		  	 	 }
+		  	 	 nb_foundLabel = list_labels.size();
+		  	 	 Random rand = new Random();
+		  	 	 int  n,Flag_In,label,Size, x,y,z;
+		  	 	 int dist = 5; // devrait varier en fonction de x,y, et z car les "distances" ne sont pas identiques puisque les pixels ne sont pas cubiques
+		  	 	 System.out.println(nb_foundLabel);
+		  	 	 for (int i =0 ; i< nb_foundLabel;i++){
+		  	 		IJ.log( "i =  " + i + " ");
+		  	 	 	Flag_In = 0;
+		  	 	 	label =list_labels.get(i);
+		  	 	 	Size =list_coordinates.get(i).size();
+		  	 	 	System.out.println(label);
+		  	 	 	System.out.println(Size);
+		  	 	 	do {
+		  	 	 		n = rand.nextInt(Size);
+		  	 	 		
+		  	 	 		x = (int)list_coordinates.get(i).get(n).get(0);
+		  	 	 		y = (int)list_coordinates.get(i).get(n).get(1);
+		  	 	 		z = (int)list_coordinates.get(i).get(n).get(2);	  
+		  	 	 			 	 		
+		  	 	 		if (img.getVoxel(x+dist, y, z) == label && img.getVoxel(x, y+dist, z) == label && img.getVoxel(x, y, z+dist) == label && img.getVoxel(x-dist, y, z) == label && img.getVoxel(x, y-dist, z)== label && img.getVoxel(x, y, z-dist) == label &&  img.getVoxel(x+dist, y+dist, z+dist)== label && img.getVoxel(x-dist, y-dist, z-dist)== label){
+		  	 	 			Flag_In = 1 ;
+		  	 	 		}
+		  	 	 		
+		  	 	 		
+		  	 	 	} while(Flag_In == 1);
+		  	 	 	System.out.println(i);
+		  	 	 	img_markers.setVoxel(x,y,z,1);
+		  	 	 	//img_markers.setVoxel(list_min.get(i).get(0)+((list_max.get(i).get(0)-list_min.get(i).get(0))/2),list_min.get(i).get(1)+((list_max.get(i).get(1)-list_min.get(i).get(1))/2),list_min.get(i).get(2)+((list_max.get(i).get(2)-list_min.get(i).get(2))/2), 1);
+		  	 	 }
+				// marker pour le background
+					Flag_In = 0;	  	 	 	
+		  	 	 	do {
+		  	 	 		x = rand.nextInt(width);
+		  	 	 		y = rand.nextInt(height);
+		  	 	 		z = rand.nextInt(nSlices);
+		  	 	 			  	 	 			 	 		
+		  	 	 		if (img.getVoxel(x, y, z)== 0){
+		  	 	 			Flag_In = 1 ;
+		  	 	 		IJ.log( " Find ");
+		  	 	 		} 	 	
+		  	 	 	} while(Flag_In == 1);
+		  	 	 	img_markers.setVoxel(x,y,z,1);
+		  	 	 			
+		  	 	imp_markers.show();				
+		  	 	return 	imp_markers;	
+		}
+		
+		void filterLabelSize( int seuil )
+		{
+			ImageStack labeledImage = resultImage.getStack();
+			ArrayList<ArrayList<Integer>> label = new ArrayList<ArrayList<Integer>>();
+						
+			// initialization
+			label.add(new ArrayList<Integer>()); // index O = label number ; index 1 = number of pixel
+			label.get(0).add((int)labeledImage.getVoxel(0, 0, 0));
+			label.get(0).add(0);
+			
+			int sizeX = labeledImage.getWidth();
+	        int sizeY = labeledImage.getHeight();
+	        int sizeZ = labeledImage.getSize();
+	        
+	        //TreeSet<Integer> labels = new TreeSet<Integer> ();
+	        int flag ;
+	        // iterate on image pixels
+	        for (int z = 0; z < sizeZ; z++) {
+	        	IJ.showProgress(z, sizeZ);
+	        	for (int y = 0; y < sizeY; y++) 
+	        	{
+	        		for (int x = 0; x < sizeX; x++) 
+	        		{
+	        			flag = 0 ;
+	        			for( int i = 0 ; i< label.size() ; i++)
+	        			{
+	        				if (label.get(i).get(0) == (int) labeledImage.getVoxel(x, y, z))
+	        				{
+	        					flag = 1;
+	        					label.get(i).set(1,label.get(i).get(1) + 1);
+	        					break;
+	        				}
+	        			}
+	        			if (flag == 0)
+	        			{
+
+	        				label.add(new ArrayList<Integer>());
+	        				label.get(label.size()-1).add( (int) labeledImage.getVoxel(x, y, z));
+	        				label.get(label.size()-1).add( 1);
+	        			}
+	        			
+	        		}
+
+	        	}
+	        }
+	        	IJ.showProgress(1);
+	        
+	        	if(markersImage != null)
+	        	{
+	        		ImageStack markersStack = markersImage.getStack();
+
+	        		for (int z = 0; z < sizeZ; z++) {
+	        			IJ.showProgress(z, sizeZ);
+	        			for (int y = 0; y < sizeY; y++) 
+	        			{
+	        				for (int x = 0; x < sizeX; x++) 
+	        				{
+	        					for( int i = 0 ; i< label.size() ; i++)
+	        					{
+	        						if(labeledImage.getVoxel(x, y, z) == label.get(i).get(0)
+	        								&& label.get(i).get(1) <= seuil)
+	        						{
+	        							markersStack.setVoxel(x, y, z, 0);
+	        							break;
+	        						}
+	        					}
+
+
+	        				}
+	        			}
+	        		}
+	        		IJ.showProgress(1);
+	        	}
+	        	else
+	        	{
+	        		markersImage = IJ.createImage("markers", sizeX, sizeY, sizeZ, labeledImage.getBitDepth() );
+	        		markersImage.setCalibration( inputImage.getCalibration() );
+	        		
+	    			ImageStack markersStack = markersImage.getStack();
+	    			int dist = 20;
+	        		for (int z = 0; z < sizeZ; z++) {
+	        			IJ.showProgress(z, sizeZ);
+	        			for (int y = 0; y < sizeY; y++) 
+	        			{
+	        				for (int x = 0; x < sizeX; x++) 
+	        				{
+	        					
+	        					for( int i = 0 ; i< label.size() ; i++)
+	        					{
+	        						if(labeledImage.getVoxel(x, y, z) == label.get(i).get(0) && label.get(i).get(1) > seuil 
+	        								&& labeledImage.getVoxel(x+dist, y, z) == labeledImage.getVoxel(x, y, z)
+	        								&& labeledImage.getVoxel(x, y+dist, z) == labeledImage.getVoxel(x, y, z)
+	        								&& labeledImage.getVoxel(x, y, z+dist) == labeledImage.getVoxel(x, y, z)
+	        								&& labeledImage.getVoxel(x-dist, y, z) == labeledImage.getVoxel(x, y, z)
+	        								&& labeledImage.getVoxel(x, y-dist, z)== labeledImage.getVoxel(x, y, z)
+	        								&& labeledImage.getVoxel(x, y, z-dist) == labeledImage.getVoxel(x, y, z)
+	        								&& labeledImage.getVoxel(x+dist, y+dist, z+dist)== labeledImage.getVoxel(x, y, z)
+	        								&& labeledImage.getVoxel(x-dist, y-dist, z-dist)== labeledImage.getVoxel(x, y, z))
+	        						{
+	        							markersStack.setVoxel(x, y, z, 1);
+	        							break;
+	        						}
+	        					}
+	        					      					
+	        					
+	        				}
+	        			}
+	        		}
+	        	
+	        				IJ.showProgress(1);
+	        	  
+	        	}
+	        			/*
+	        	ArrayList<Integer> smallLabels = new ArrayList<Integer>();
+	        	for( int i = 0 ; i< label.size() ; i++)
+    			{
+	        		if( label.get(i).get(1) <= seuil)
+	        		{
+	        			smallLabels.add(label.get(i).get(0));
+	        		}
+    			}*/
+	             
+	        //return smallLabels;
+		}
+		
+	// End of Elise Functions
+		
 	/* **********************************************************
 	 * Macro recording related methods
 	 * *********************************************************/
