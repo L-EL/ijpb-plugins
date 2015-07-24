@@ -252,10 +252,10 @@ public class TestMorphologicalSegmentation {
 		*/
 		ImageJ.main( args );
 		
-		IJ.open( TestMorphologicalSegmentation.class.getResource( "/files/trans_Col0_676-s63.tif" ).getFile() );		
-		new MorphologicalSegmentation().run( null );
-		ImagePlus imgRef = new ImagePlus("/files/trans_Col0_676_133c_fermee-s63.tif");
-		imgRef.show();
+		//IJ.open( TestMorphologicalSegmentation.class.getResource( "/files/trans_Col0_676-s63.tif" ).getFile() );		
+		//new MorphologicalSegmentation().run( null );
+		//ImagePlus imgRef = new ImagePlus("/files/trans_Col0_676_133c_fermee-s63.tif");
+		//imgRef.show();
 	}
 
 }
