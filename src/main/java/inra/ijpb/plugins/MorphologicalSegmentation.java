@@ -24,9 +24,13 @@ import java.awt.event.MouseWheelEvent;
 import java.awt.event.MouseWheelListener;
 import java.awt.event.WindowEvent;
 import java.awt.image.ColorModel;
+import java.awt.Toolkit;
+
+import java.lang.Math;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Random;
 import java.util.TreeSet;
 import java.util.concurrent.ExecutorService;
@@ -57,6 +61,7 @@ import ij.gui.Overlay;
 import ij.gui.Roi;
 import ij.gui.ShapeRoi;
 import ij.gui.StackWindow;
+import ij.io.LogStream;
 import ij.measure.Calibration;
 import ij.plugin.PlugIn;
 import ij.plugin.frame.Recorder;
@@ -73,7 +78,7 @@ import inra.ijpb.morphology.Strel3D;
 import inra.ijpb.util.ColorMaps;
 import inra.ijpb.util.ColorMaps.CommonLabelMaps;
 import inra.ijpb.watershed.Watershed;
-import ij.io.LogStream;
+
 
 //import Sync_Win; // .*;//. //DisplayChangeEvent // pb : http://www.wikihow.com/Add-JARs-to-Project-Build-Paths-in-Eclipse-%28Java%29
 
@@ -110,6 +115,10 @@ public class MorphologicalSegmentation implements PlugIn {
 	ImagePlus resultImage = null;	
 	
 	// add by elise 
+	int width;
+	int height;
+	int nSlices;
+	int bitDepth;
 	/** image containing the final results of the watershed segmentation (basins with or without dams) */
 	ImagePlus markersImage = null;
 	ImagePlus reslicedImage = null;
@@ -303,6 +312,11 @@ public class MorphologicalSegmentation implements PlugIn {
 	/** flag to select/deselect  resliced image synchronizing*/
 	private boolean synchronize = false;
 	
+	/** checkbox to enable/disable the modifying of local marker image with an intensity filtering*/
+	JCheckBox localFilteringCheckBox;
+	/** flag to select/deselect the advanced options */
+	private boolean localFiltering = false;
+	
 	JCheckBox removeSmallLabelsCheckBox;
 	private boolean removeMinLabels = false;	
 	
@@ -411,7 +425,7 @@ public class MorphologicalSegmentation implements PlugIn {
 
 					public void run()
 					{
-						IJ.log(""+e.getSource()+"");
+						//IJ.log(""+e.getSource()+"");
 						
 						// "Run" segmentation button		
 						if( e.getSource() == segmentButton )
@@ -426,8 +440,8 @@ public class MorphologicalSegmentation implements PlugIn {
 						else if( e.getSource() == addMarkersCheckBox )
 						{
 							addMarkers = !addMarkers;
-							resultDisplayList.setSelectedItem( overlaidImageMarkersText);
-							updateResultOverlay();
+							//resultDisplayList.setSelectedItem( overlaidImageMarkersText);
+							//updateResultOverlay();
 							if (addMarkers)
 							{
 								ic.addMouseListener(mlAdd);
@@ -445,13 +459,29 @@ public class MorphologicalSegmentation implements PlugIn {
 							
 							if (removeMarkers)
 							{
-								ic.addMouseListener(mlRemove);
-								resultDisplayList.setSelectedItem( overlaidImageMarkersText );
-								updateResultOverlay();
+								if (spreadingMarkers)
+								{
+									ic.addMouseListener(mlRemovePix);
+								}
+								else{
+									ic.addMouseListener(mlRemove);
+								//resultDisplayList.setSelectedItem( overlaidImageMarkersText );
+								//updateResultOverlay();
+								ic.addMouseMotionListener(mlRemovePixDragged); 
+								}
+								
 							}
 							else
 							{
-								ic.removeMouseListener(mlRemove); // doesn't work 
+								if (spreadingMarkers)
+								{
+									ic.removeMouseListener(mlRemovePix);
+								}
+								else
+								{
+									ic.removeMouseListener(mlRemove); // doesn't work (?)
+									ic.removeMouseMotionListener(mlRemovePixDragged);
+								}
 							}
 						}
 						else if( e.getSource() == synchronizeCheckBox )
@@ -511,6 +541,22 @@ public class MorphologicalSegmentation implements PlugIn {
 								ic.removeMouseListener(mlLocalChange); 
 							}
 						}
+						
+						else if( e.getSource() == localFilteringCheckBox )
+						{
+							localFiltering = !localFiltering;
+							//resultDisplayList.setSelectedItem( overlaidImageMarkersText );
+							//updateResultOverlay();
+							if (localFiltering)
+							{
+								ic.addMouseListener(mlLocalFiltering);
+							}
+							else
+							{
+								ic.removeMouseListener(mlLocalFiltering); 
+							}
+						}
+						
 						else if( e.getSource() == removeSmallLabelsCheckBox )
 						{
 							removeMinLabels = !removeMinLabels;
@@ -594,8 +640,8 @@ public class MorphologicalSegmentation implements PlugIn {
 			
 			
 			// Zoom in if image is too small
-			while(ic.getWidth() < 512 && ic.getHeight() < 512)
-				IJ.run( imp, "In","" );
+			//while(ic.getWidth() < 512 && ic.getHeight() < 512)
+			//	IJ.run( imp, "In","" );
 
 			setTitle( "Morphological Segmentation" );
 
@@ -768,6 +814,10 @@ public class MorphologicalSegmentation implements PlugIn {
          			synchronizeCheckBox.setToolTipText( "synchronize resliced image" );
          			synchronizeCheckBox.addActionListener( listener );
          			
+         			localFilteringCheckBox = new JCheckBox( " Intensity filter", localFiltering );
+         			localFilteringCheckBox.setToolTipText( "Enable modifying localy markers by filtering on the intensity variation" );
+         			localFilteringCheckBox.addActionListener( listener );
+         			
          		// size label threshold  value ("threshold")
          			thresholdLabel = new JLabel( "threshold" );
          			thresholdLabel.setToolTipText( "threshold" );
@@ -821,9 +871,13 @@ public class MorphologicalSegmentation implements PlugIn {
 			segmentationConstraints.gridy++;					
 			segmentationPanel.add( synchronizeCheckBox, segmentationConstraints );
 			segmentationConstraints.gridx++;
+			
 			segmentationConstraints.anchor = GridBagConstraints.CENTER;
 			segmentationConstraints.fill = GridBagConstraints.NONE;
 			segmentationPanel.add( ResegmentButton, segmentationConstraints );
+			segmentationConstraints.gridx++;
+			segmentationPanel.add( localFilteringCheckBox, segmentationConstraints );
+			
 			// end add
     		
 			// === Results panel ===
@@ -1489,9 +1543,28 @@ public class MorphologicalSegmentation implements PlugIn {
 						{
 							regionalMinima = markersImage.getImageStack().duplicate();
 						}
+						else if (localFiltering)
+						{
+							double dynamic;
+							try{
+								dynamic = Double.parseDouble( dynamicText.getText() );
+							}
+							catch( NullPointerException ex )
+							{
+								IJ.error( "Morphological Sementation", "ERROR: missing dynamic value" );
+								return;
+							}
+							catch( NumberFormatException ex )
+							{
+								IJ.error( "Morphological Sementation", "ERROR: dynamic value must be a number" );
+								return;
+							}
+							image = 
+							regionalMinima = MinimaAndMaxima3D.extendedMinimaDouble( image, dynamic, connectivity );//modify by Elise (remove (int) in front of dynamic value)
+						}
 						else
 						{			
-							IJ.log( "start" );
+							
 							ImagePlus LabeledImage = AskForAnotherImage();
 							if( null ==  LabeledImage )
 							{
@@ -1505,8 +1578,10 @@ public class MorphologicalSegmentation implements PlugIn {
 							
 						}
 						//add by elise
+						
 						markersImage = new ImagePlus( "markers", regionalMinima );
 						markersImage.setCalibration( inputImage.getCalibration() );
+						//IJ.saveAsTiff(markersImage,"/home/elaruelle/Documents/imagesConf/markers/autoSave/");
 						// end add
 						if( null == regionalMinima )
 						{
@@ -1592,6 +1667,7 @@ public class MorphologicalSegmentation implements PlugIn {
 						ResegmentButton.setToolTipText( ResegmentTip );
 						// set thread to null					
 						segmentationThread = null;
+						Toolkit.getDefaultToolkit().beep();
 
 					}
 				};
@@ -1983,7 +2059,7 @@ public class MorphologicalSegmentation implements PlugIn {
 		MouseListener mlAdd = new MouseAdapter() {
 		    @Override
 		    public void mouseClicked(MouseEvent eImg) {
-		    	IJ.log(""+eImg.getSource()+"");
+		    	//IJ.log(""+eImg.getSource()+"");
 		    	int x = eImg.getX();
 		    	int y = eImg.getY();
 		    	int ox = imp.getWindow().getCanvas().offScreenX(x);
@@ -1995,7 +2071,7 @@ public class MorphologicalSegmentation implements PlugIn {
 		    	
 		    	//IJ.log(""+markersImage.getPixel(x,y)+"");  // affiche une adresse car 3D pas 2D
 		    	//IJ.log(""+imgStack.getVoxel(x,y,z)+"");
-		    	IJ.log(""+imgStack.getBitDepth()+"");
+		    	//IJ.log(""+imgStack.getBitDepth()+"");
 		    	//IJ.log(""+imgStack.getHeight()+"");
 		    	//IJ.log(""+imgStack.getWidth()+"");
 		    	//IJ.log(""+imgStack.getSize()+"");
@@ -2028,7 +2104,7 @@ public class MorphologicalSegmentation implements PlugIn {
 		MouseMotionListener mlAddDragged = new MouseAdapter() {
 		    @Override
 		    public void mouseDragged(MouseEvent eImg) {
-		    	IJ.log(""+eImg.getSource()+"");
+		    	//IJ.log(""+eImg.getSource()+"");
 		    	int x = eImg.getX();
 		    	int y = eImg.getY();
 		    	int ox = imp.getWindow().getCanvas().offScreenX(x);
@@ -2040,7 +2116,7 @@ public class MorphologicalSegmentation implements PlugIn {
 		    	
 		    	//IJ.log(""+markersImage.getPixel(x,y)+"");  // affiche une adresse car 3D pas 2D
 		    	//IJ.log(""+imgStack.getVoxel(x,y,z)+"");
-		    	IJ.log(""+imgStack.getBitDepth()+"");
+		    	//IJ.log(""+imgStack.getBitDepth()+"");
 		    	//IJ.log(""+imgStack.getHeight()+"");
 		    	//IJ.log(""+imgStack.getWidth()+"");
 		    	//IJ.log(""+imgStack.getSize()+"");
@@ -2072,13 +2148,104 @@ public class MorphologicalSegmentation implements PlugIn {
 		};
 		
 		//end add
-		
+		// remove (voxel scale) tools :
+		MouseListener mlRemovePix = new MouseAdapter() {
+		    @Override
+		    public void mouseClicked(MouseEvent eImg) {
+		    	//IJ.log(""+eImg.getSource()+"");
+		    	int x = eImg.getX();
+		    	int y = eImg.getY();
+		    	int ox = imp.getWindow().getCanvas().offScreenX(x);
+				int oy = imp.getWindow().getCanvas().offScreenY(y);
+		    	int z = displayImage.getCurrentSlice();
+		    	//imp.mouseMoved(x, y); //--> affiche les coordonnées au niveau de la fenetre imagej
+		    	ImageStack imgStack = markersImage.getStack();
+		    	//markersImage.setDefault16bitRange(16);
+		    	
+		    	//IJ.log(""+markersImage.getPixel(x,y)+"");  // affiche une adresse car 3D pas 2D
+		    	//IJ.log(""+imgStack.getVoxel(x,y,z)+"");
+		    	//IJ.log(""+imgStack.getBitDepth()+"");
+		    	//IJ.log(""+imgStack.getHeight()+"");
+		    	//IJ.log(""+imgStack.getWidth()+"");
+		    	//IJ.log(""+imgStack.getSize()+"");
+		    	//IJ.log(""+markersImage.getType()+"");
+		    	imgStack.setVoxel(ox, oy, z-1, 0);
+		    	/*if(spreadingMarkers)
+				{
+						
+						//if(regionalMinima.getVoxel(x, y, z) !=0 )
+		    		imgStack.setVoxel(ox, oy, z,0);
+		    		imgStack.setVoxel(ox+1, oy, z,0);
+		    		imgStack.setVoxel(ox, oy+1, z,0);
+		    		imgStack.setVoxel(ox, oy, z+1,0);
+		    		imgStack.setVoxel(ox-1, oy, z,0);
+		    		imgStack.setVoxel(ox, oy-1, z,0);
+		    		imgStack.setVoxel(ox, oy, z-1,0);
+						
+				
+				}*/
+		    	IJ.log(""+imgStack.getVoxel(x,y,z)+"");
+		    	markersImage.updateAndDraw();
+		    	updateResultOverlay();
+		    	//IJ.log(""+x+"  "+y+"  "+z+"");
+		    	//IJ.log(""+ox+"  "+oy+" ");
+		    	//IJ.log(""+markersImage.getPixel(x,y)+""); // affiche une adresse car 3D pas 2D
+		    	
+		    }
+		    
+		};
+		MouseMotionListener mlRemovePixDragged = new MouseAdapter() {
+		    @Override
+		    public void mouseDragged(MouseEvent eImg) {
+		    	//IJ.log(""+eImg.getSource()+"");
+		    	int x = eImg.getX();
+		    	int y = eImg.getY();
+		    	int ox = imp.getWindow().getCanvas().offScreenX(x);
+				int oy = imp.getWindow().getCanvas().offScreenY(y);
+		    	int z = displayImage.getCurrentSlice();
+		    	//imp.mouseMoved(x, y); //--> affiche les coordonnées au niveau de la fenetre imagej
+		    	ImageStack imgStack = markersImage.getStack();
+		    	//markersImage.setDefault16bitRange(16);
+		    	
+		    	//IJ.log(""+markersImage.getPixel(x,y)+"");  // affiche une adresse car 3D pas 2D
+		    	//IJ.log(""+imgStack.getVoxel(x,y,z)+"");
+		    	//IJ.log(""+imgStack.getBitDepth()+"");
+		    	//IJ.log(""+imgStack.getHeight()+"");
+		    	//IJ.log(""+imgStack.getWidth()+"");
+		    	//IJ.log(""+imgStack.getSize()+"");
+		    	//IJ.log(""+markersImage.getType()+"");
+		    	imgStack.setVoxel(ox, oy, z-1, 0);
+		    	if(spreadingMarkers)
+				{
+						
+						//if(regionalMinima.getVoxel(x, y, z) !=0 )
+		    		imgStack.setVoxel(ox, oy, z,0);
+		    		imgStack.setVoxel(ox+1, oy, z,0);
+		    		imgStack.setVoxel(ox, oy+1, z,0);
+		    		imgStack.setVoxel(ox, oy, z+1,0);
+		    		imgStack.setVoxel(ox-1, oy, z,0);
+		    		imgStack.setVoxel(ox, oy-1, z,0);
+		    		imgStack.setVoxel(ox, oy, z-1,0);
+						
+				
+				}
+		    	IJ.log(""+imgStack.getVoxel(x,y,z)+"");
+		    	markersImage.updateAndDraw();
+		    	updateResultOverlay();
+		    	//IJ.log(""+x+"  "+y+"  "+z+"");
+		    	//IJ.log(""+ox+"  "+oy+" ");
+		    	//IJ.log(""+markersImage.getPixel(x,y)+""); // affiche une adresse car 3D pas 2D
+		    	
+		    }
+		    
+		};
+		// end add tools for remove pixel(s) by Elise
 		
 		// add by elise for 
 				MouseListener mlRemove = new MouseAdapter() {
 				    @Override
 				    public void mouseClicked(MouseEvent eImg) {
-				    	IJ.log(""+eImg.getSource()+"");
+				    	//IJ.log(""+eImg.getSource()+"");
 				    	int xi = eImg.getX();
 				    	int yi = eImg.getY();
 				    	int ox = imp.getWindow().getCanvas().offScreenX(xi);
@@ -2091,10 +2258,10 @@ public class MorphologicalSegmentation implements PlugIn {
 				    	//markersImage.setDefault16bitRange(16);
 				    	double label = imgStack.getVoxel(ox,oy,zi-1);
 				    	
-				    	int width = imgStack.getWidth();
-						int height = imgStack.getHeight();
-						int nSlices = imgStack.getSize();
-						int bitDepth = imgStack.getBitDepth() ;
+				    	//int width = imgStack.getWidth();
+						//int height = imgStack.getHeight();
+						//int nSlices = imgStack.getSize();
+						//int bitDepth = imgStack.getBitDepth() ;
 						for(int z = 0; z < nSlices; z++){  	 	 	
 					  	 	 	for (int y = 0; y <height; y++){
 					  	 	 		for (int x = 0; x < width; x++){
@@ -2122,7 +2289,7 @@ public class MorphologicalSegmentation implements PlugIn {
 					java.util.List<Integer> list_value = new ArrayList<Integer>();
 				    @Override
 				    public void mouseDragged(MouseEvent eImg) {
-				    	IJ.log(""+eImg.getSource()+"");
+				    	//IJ.log(""+eImg.getSource()+"");
 				    	int xi = eImg.getX();
 				    	int yi = eImg.getY();
 				    	int ox = imp.getWindow().getCanvas().offScreenX(xi);
@@ -2136,10 +2303,10 @@ public class MorphologicalSegmentation implements PlugIn {
 				    	//markersImage.setDefault16bitRange(16);
 				    	double label = imgStack.getVoxel(ox,oy,zi-1);
 				    	
-				    	int width = imgStack.getWidth();
-						int height = imgStack.getHeight();
-						int nSlices = imgStack.getSize();
-						int bitDepth = imgStack.getBitDepth() ;
+				    	//int width = imgStack.getWidth();
+						//int height = imgStack.getHeight();
+						//int nSlices = imgStack.getSize();
+						//int bitDepth = imgStack.getBitDepth() ;
 						for(int z = 0; z < nSlices; z++){  	 	 	
 					  	 	 	for (int y = 0; y <height; y++){
 					  	 	 		for (int x = 0; x < width; x++){
@@ -2166,9 +2333,24 @@ public class MorphologicalSegmentation implements PlugIn {
 				
 				MouseListener mlLocalChange = new MouseAdapter() {
 				    @Override
-				    public void mouseClicked(MouseEvent eImg) {
-				    	IJ.log(""+eImg.getSource()+"");
-				    	int xi = eImg.getX();
+				    public void mouseClicked(final MouseEvent eImg) {
+				    	//IJ.log(""+eImg.getSource()+"");
+				    	final Thread oldThread = segmentationThread;
+				    	
+				    	Thread newThread = new Thread() {		
+						public void run()
+							{
+							// Wait for the old task to finish
+							
+							if (null != oldThread) 
+							{
+								try { 
+									IJ.log("Waiting for old task to finish...");
+									oldThread.join(); 
+								} 
+								catch (InterruptedException ie)	{ /*IJ.log("interrupted");*/ }
+							}
+								int xi = eImg.getX();
 				    	int yi = eImg.getY();
 				    	int ox = imp.getWindow().getCanvas().offScreenX(xi);
 						int oy = imp.getWindow().getCanvas().offScreenY(yi);
@@ -2179,63 +2361,64 @@ public class MorphologicalSegmentation implements PlugIn {
 				    	ImageStack markersStack = markersImage.getStack();
 				    	//markersImage.setDefault16bitRange(16);
 				    	double label = imgStack.getVoxel(ox,oy,zi-1);
-				    	int width = imgStack.getWidth();
-						int height = imgStack.getHeight();
-						int nSlices = imgStack.getSize();
-						int bitDepth = imgStack.getBitDepth() ;
+				    	//int width = imgStack.getWidth();
+						//int height = imgStack.getHeight();
+						//int nSlices = imgStack.getSize();
+						//int bitDepth = imgStack.getBitDepth() ;
 						
 				    	ImagePlus imageLocal = IJ.createImage("local", width, height, nSlices, bitDepth) ;
-				    	imageLocal .setCalibration(imp.getCalibration());
-						ImageStack localStack = imageLocal .getStack();					
-						
-				    	
-				    	ArrayList<ArrayList<Integer>> coord = new ArrayList<ArrayList<Integer>>() ;
-				    	
-				    	IJ.log(""+coord.size()+"");
-						for(int z = 0; z < nSlices; z++){  	 	 	
-					  	 	 	for (int y = 0; y <height; y++){
-					  	 	 		for (int x = 0; x < width; x++){
-					  	 	 			if(imgStack.getVoxel(x, y, z) == label)
-					  	 	 			{
-					  	 	 				coord.add(new ArrayList<Integer>() );
-					  	 	 				coord.get(coord.size() -1).add(x);
-					  	 	 				coord.get(coord.size() -1).add(y);
-					  	 	 				coord.get(coord.size() -1).add(z);
-					  	 	 				localStack.setVoxel(x, y, z,rawStack.getVoxel(x, y, z));
-					  	 	 			}
-					  	 	 		}
-					  	 	 	}
-						}
-						
-						
+				    	imageLocal.setCalibration(imp.getCalibration());
+						ImageStack localStack = imageLocal.getStack();					
 						// read connectivity
 						int readConn = Integer.parseInt( (String) connectivityList.getSelectedItem() );
-
-						// convert connectivity to 3D if needed (2D images are processed as 3D)
-						if( inputIs2D )
-							readConn = readConn == 4 ? 6 : 26;
+						boolean mustSpreading = spreadingMarkers;
 						
-						final int connectivity = readConn;
 						
-						// read dynamic
-						final double dynamic;
-						try{
-							dynamic = Double.parseDouble( dynamicText.getText() );
-						}
-						catch( NullPointerException ex )
-						{
-							IJ.error( "Morphological Sementation", "ERROR: missing dynamic value" );
-							return;
-						}
-						catch( NumberFormatException ex )
-						{
-							IJ.error( "Morphological Sementation", "ERROR: dynamic value must be a number" );
-							return;
-						}
+								ArrayList<ArrayList<Integer>> coord = new ArrayList<ArrayList<Integer>>() ;
+								
+								IJ.log("voxel number in this label : "+coord.size()+"");
+								for(int z = 0; z < nSlices; z++){  	 	 	
+									for (int y = 0; y <height; y++){
+										for (int x = 0; x < width; x++){
+											if(imgStack.getVoxel(x, y, z) == label)
+											{
+												coord.add(new ArrayList<Integer>() );
+												coord.get(coord.size() -1).add(x);
+												coord.get(coord.size() -1).add(y);
+												coord.get(coord.size() -1).add(z);
+												localStack.setVoxel(x, y, z,rawStack.getVoxel(x, y, z));
+											}
+										}
+									}
+								}
 
-						// Run extended minima
-						ImageStack regionalMinima = MinimaAndMaxima3D.extendedMinimaDouble( localStack, dynamic, connectivity );
-/*
+
+
+								// convert connectivity to 3D if needed (2D images are processed as 3D)
+								if( inputIs2D )
+									readConn = readConn == 4 ? 6 : 26;
+
+								final int connectivity = readConn;
+
+								// read dynamic
+								final double dynamic;
+								try{
+									dynamic = Double.parseDouble( dynamicText.getText() );
+								}
+								catch( NullPointerException ex )
+								{
+									IJ.error( "Morphological Sementation", "ERROR: missing dynamic value" );
+									return;
+								}
+								catch( NumberFormatException ex )
+								{
+									IJ.error( "Morphological Sementation", "ERROR: dynamic value must be a number" );
+									return;
+								}
+
+								// Run extended minima
+								ImageStack regionalMinima = MinimaAndMaxima3D.extendedMinimaDouble( localStack, dynamic, connectivity );
+								/*
 						for(int z = 0; z < nSlices; z++){  	 	 	
 							for (int y = 0; y <height; y++){
 								for (int x = 0; x < width; x++){
@@ -2246,50 +2429,256 @@ public class MorphologicalSegmentation implements PlugIn {
 								}
 							}
 						}*/
-						
-						if(spreadingMarkers)
-						{
-							for(int i = 0; i< coord.size();i++)
-							{
-								int x = coord.get(i).get(0);
-								int y = coord.get(i).get(1);
-								int z = coord.get(i).get(2);
-								if(regionalMinima.getVoxel(x, y, z) !=0 )
-								{
-									markersStack.setVoxel(x, y, z,regionalMinima.getVoxel(x, y, z));
-									markersStack.setVoxel(x+1, y, z,regionalMinima.getVoxel(x, y, z));
-									markersStack.setVoxel(x, y+1, z,regionalMinima.getVoxel(x, y, z));
-									markersStack.setVoxel(x, y, z+1,regionalMinima.getVoxel(x, y, z));
-									markersStack.setVoxel(x-1, y, z,regionalMinima.getVoxel(x, y, z));
-									markersStack.setVoxel(x, y-1, z,regionalMinima.getVoxel(x, y, z));
-									markersStack.setVoxel(x, y, z-1,regionalMinima.getVoxel(x, y, z));
-								}
-							}
-						}
-						else
-						{
 
-							for(int i = 0; i< coord.size();i++)
-							{
-								int x = coord.get(i).get(0);
-								int y = coord.get(i).get(1);
-								int z = coord.get(i).get(2);
-								if(regionalMinima.getVoxel(x, y, z) !=0 )
+								if(mustSpreading)
 								{
-									markersStack.setVoxel(x, y, z,regionalMinima.getVoxel(x, y, z));
+									for(int i = coord.size()-1; i>=0;i--)
+									//for(int i = 0; i< coord.size();i++)
+									{
+										int x = coord.get(i).get(0);
+										int y = coord.get(i).get(1);
+										int z = coord.get(i).get(2);
+										coord.set(i, null); 
+										if(regionalMinima.getVoxel(x, y, z) !=0 )
+										{
+											markersStack.setVoxel(x, y, z,regionalMinima.getVoxel(x, y, z));
+											markersStack.setVoxel(x+1, y, z,regionalMinima.getVoxel(x, y, z));
+											markersStack.setVoxel(x, y+1, z,regionalMinima.getVoxel(x, y, z));
+											markersStack.setVoxel(x, y, z+1,regionalMinima.getVoxel(x, y, z));
+											markersStack.setVoxel(x-1, y, z,regionalMinima.getVoxel(x, y, z));
+											markersStack.setVoxel(x, y-1, z,regionalMinima.getVoxel(x, y, z));
+											markersStack.setVoxel(x, y, z-1,regionalMinima.getVoxel(x, y, z));
+										}
+										
+									}
 								}
-							}
-						}
+								else
+								{
 
-						IJ.log(""+imgStack.getVoxel(xi,yi,zi)+"");
-				    	markersImage.updateAndDraw();
-				    	updateResultOverlay();
-				    	IJ.log(""+xi+"  "+yi+"  "+zi+"");
-				    	IJ.log(""+ox+"  "+oy+" ");
-				    	IJ.log(""+markersImage.getPixel(xi,yi)+"");
-				    	
+									for(int i = coord.size()-1; i>=0 ;i--)
+									//for(int i = 0; i< coord.size();i++)
+									{										
+										int x = coord.get(i).get(0);
+										int y = coord.get(i).get(1);
+										int z = coord.get(i).get(2);
+										coord.set(i, null); 
+										if(regionalMinima.getVoxel(x, y, z) !=0 )
+										{
+											markersStack.setVoxel(x, y, z,regionalMinima.getVoxel(x, y, z));
+										}
+									}
+								}
+
+								IJ.log(""+imgStack.getVoxel(xi,yi,zi)+"");
+								markersImage.updateAndDraw();
+								updateResultOverlay();
+								IJ.log(""+xi+"  "+yi+"  "+zi+"");
+								IJ.log(""+ox+"  "+oy+" ");
+								IJ.log(""+markersImage.getPixel(xi,yi)+"");
+								coord = null;
+								// set thread to null					
+								segmentationThread = null;
+								Toolkit.getDefaultToolkit().beep();
+							}
+						};
+						segmentationThread = newThread;
+						newThread.start();
+						IJ.freeMemory();
+
 				    }
 				};
+				
+				// ---------- test filtering
+				MouseListener mlLocalFiltering = new MouseAdapter() {
+					@Override
+					public void mouseClicked(final MouseEvent eImg) {
+						LogStream.redirectSystem(true);
+						//IJ.log(""+eImg.getSource()+"");
+						final Thread oldThread = segmentationThread;
+
+						Thread newThread = new Thread() {		
+							public void run()
+							{
+								// Wait for the old task to finish							
+								if (null != oldThread) 
+								{
+									try { 
+										IJ.log("Waiting for old task to finish...");
+										oldThread.join(); 
+									} 
+									catch (InterruptedException ie)	{ /*IJ.log("interrupted");*/ }
+								}
+								int xi = eImg.getX();
+								int yi = eImg.getY();
+								int ox = imp.getWindow().getCanvas().offScreenX(xi);
+								int oy = imp.getWindow().getCanvas().offScreenY(yi);
+								int zi = displayImage.getCurrentSlice();
+
+								ImageStack imgStack = resultImage.getStack();
+								ImageStack rawStack = inputStackCopy;
+								ImageStack markersStack = markersImage.getStack();
+								//markersImage.setDefault16bitRange(16);
+								double label = imgStack.getVoxel(ox,oy,zi-1);
+								//int width = imgStack.getWidth();
+								//int height = imgStack.getHeight();
+								//int nSlices = imgStack.getSize();
+								//int bitDepth = imgStack.getBitDepth();
+
+								ImagePlus imageLocal = IJ.createImage("local", width, height, nSlices, bitDepth) ;
+								imageLocal.setCalibration(imp.getCalibration());
+								ImageStack localStack = imageLocal.getStack();					
+								// read connectivity
+								int readConn = Integer.parseInt( (String) connectivityList.getSelectedItem() );
+								boolean mustSpreading = spreadingMarkers;
+
+								ArrayList<ArrayList<Integer>> coord = new ArrayList<ArrayList<Integer>>() ;
+
+								double ImoyRef = 0;
+								
+								IJ.log(" voxel number in this label : "+coord.size()+"");
+								for(int z = 0; z < nSlices; z++){  	 	 	
+									for (int y = 0; y <height; y++){
+										for (int x = 0; x < width; x++){
+											if(imgStack.getVoxel(x, y, z) == label)
+											{
+												coord.add(new ArrayList<Integer>() );
+												coord.get(coord.size() -1).add(x);
+												coord.get(coord.size() -1).add(y);
+												coord.get(coord.size() -1).add(z);
+												ImoyRef = ImoyRef + inputStackCopy.getVoxel(x,y,z);
+												//localStack.setVoxel(x, y, z,SobelFilter(x, y, z));
+											}
+										}
+									}
+								}
+								ImoyRef = ImoyRef/(coord.size());
+								for(int i = coord.size()-1; i>=0 ;i--)
+									
+								{										
+									int x = coord.get(i).get(0);
+									int y = coord.get(i).get(1);
+									int z = coord.get(i).get(2);
+									localStack.setVoxel(x, y, z,SobelFilter(x, y, z)/ImoyRef);
+								}
+								
+								imageLocal.show();
+								Strel3D strel = Strel3D.Shape.CUBE.fromRadius(  Integer.parseInt( gradientRadiusSizeText.getText() ) ); //
+								localStack = Morphology.dilation( localStack, strel ); //erosion
+								imageLocal.show();
+								final int connectivity = readConn;
+
+								// read dynamic
+								final double dynamic;
+								try{
+									dynamic = Double.parseDouble( dynamicText.getText() );
+								}
+								catch( NullPointerException ex )
+								{
+									IJ.error( "Morphological Sementation", "ERROR: missing dynamic value" );
+									return;
+								}
+								catch( NumberFormatException ex )
+								{
+									IJ.error( "Morphological Sementation", "ERROR: dynamic value must be a number" );
+									return;
+								}
+
+								// Run extended minima
+								ImageStack regionalMinima = MinimaAndMaxima3D.extendedMinimaDouble( localStack, dynamic, connectivity );
+								/*
+						for(int z = 0; z < nSlices; z++){  	 	 	
+							for (int y = 0; y <height; y++){
+								for (int x = 0; x < width; x++){
+									if(localStack.getVoxel(x, y, z) !=0 )
+									{
+										markersStack.setVoxel(x, y, z,localStack.getVoxel(x, y, z));
+									}
+								}
+							}
+						}*/
+
+								if(mustSpreading)
+								{
+									for(int i = coord.size()-1; i>=0;i--)
+										//for(int i = 0; i< coord.size();i++)
+									{
+										int x = coord.get(i).get(0);
+										int y = coord.get(i).get(1);
+										int z = coord.get(i).get(2);
+										coord.set(i, null); 
+										if(regionalMinima.getVoxel(x, y, z) !=0 )
+										{
+											markersStack.setVoxel(x, y, z,regionalMinima.getVoxel(x, y, z));
+											markersStack.setVoxel(x+1, y, z,regionalMinima.getVoxel(x, y, z));
+											markersStack.setVoxel(x, y+1, z,regionalMinima.getVoxel(x, y, z));
+											markersStack.setVoxel(x, y, z+1,regionalMinima.getVoxel(x, y, z));
+											markersStack.setVoxel(x-1, y, z,regionalMinima.getVoxel(x, y, z));
+											markersStack.setVoxel(x, y-1, z,regionalMinima.getVoxel(x, y, z));
+											markersStack.setVoxel(x, y, z-1,regionalMinima.getVoxel(x, y, z));
+										}
+
+									}
+								}
+								else
+								{
+
+									for(int i = coord.size()-1; i>=0 ;i--)
+										//for(int i = 0; i< coord.size();i++)
+									{										
+										int x = coord.get(i).get(0);
+										int y = coord.get(i).get(1);
+										int z = coord.get(i).get(2);
+										coord.set(i, null); 
+										if(regionalMinima.getVoxel(x, y, z) !=0 )
+										{
+											markersStack.setVoxel(x, y, z,regionalMinima.getVoxel(x, y, z));
+										}
+									}
+								}
+
+								IJ.log(""+imgStack.getVoxel(xi,yi,zi)+"");
+								markersImage.updateAndDraw();
+								updateResultOverlay();
+								IJ.log(""+xi+"  "+yi+"  "+zi+"");
+								IJ.log(""+ox+"  "+oy+" ");
+								IJ.log(""+markersImage.getPixel(xi,yi)+"");
+								coord = null;
+								// set thread to null					
+								segmentationThread = null;
+								Toolkit.getDefaultToolkit().beep();
+							}
+						};
+						segmentationThread = newThread;
+						newThread.start();
+						IJ.freeMemory();
+
+					}
+				};
+				
+				double SobelFilter(int xc, int yc, int zc){
+					//http://www.aravind.ca/cs788h_Final_Project/gradient_estimators.htm  ; avant : { { {1,2,1},{2,4,2},{1,2,1} },{ {0,0,0},{0,0,0},{0,0,0} },{ {-1,-2,-1},{-2,-4,-2},{-1,-2,-1} } };
+					double[][][] Sobel3DX = { { {1,3,1},{3,6,3},{1,3,1} },{ {0,0,0},{0,0,0},{0,0,0} },{ {-1,-3,-1},{-3,-6,-3},{-1,-3,-1} } };//new double[3][3][3];
+					double[][][] Sobel3DY = { { {1,3,1},{0,0,0},{-1,-3,-1} },{ {3,6,3},{0,0,0},{-3,-6,-3} },{ {1,3,1},{0,0,0},{-1,-3,-1} } };//new double[3][3][3];
+					double[][][] Sobel3DZ = { { {-1,0,1},{-3,0,3},{-1,0,1} },{ {-3,0,3},{-6,0,6},{-3,0,3} },{ {-1,0,1},{-3,0,3},{-1,0,1} } };//new double[3][3][3];
+					
+					double newI = 0;
+					
+					for(int i = 0; i < 3; i++){  	 	 	
+			  	 	 	for (int j = 0; j <3; j++){
+			  	 	 		for (int k = 0; k < 3; k++){ 
+			  	 	 			if (xc-1+i>0 && xc-1+i< width  && yc-1+j>0 && yc-1+j<height && zc-1+k>0 && zc-1+k< nSlices )
+			  	 	 			newI = newI+ Sobel3DX[i][j][k] * inputStackCopy.getVoxel(xc-1+i,yc-1+j,zc-1+k)
+			  	 	 				+ Sobel3DY[i][j][k] * inputStackCopy.getVoxel(xc-1+i,yc-1+j,zc-1+k)
+			  	 	 				+ Sobel3DZ[i][j][k] * inputStackCopy.getVoxel(xc-1+i,yc-1+j,zc-1+k);
+			  	 	 		}
+			  	 	 	}
+					}
+					//newI =newI/inputStackCopy.getVoxel(xc,yc,zc);
+					return newI;
+				}
+	
+				
+				// --- end test filtering
 				
 				MouseListener mlSyn = new MouseAdapter() {
 					@Override
@@ -3055,7 +3444,10 @@ public class MorphologicalSegmentation implements PlugIn {
 			IJ.error( "Morphological Segmentation", "This plugin only works on grayscale images.\nPlease convert it to 8, 16 or 32-bit." );
 			return;
 		}
-
+		width = inputImage.getWidth();
+		height = inputImage.getHeight();
+		nSlices = inputImage.getImageStack().getSize();
+		bitDepth = inputImage.getBitDepth() ;
 		inputStackCopy = inputImage.getImageStack().duplicate();
 		displayImage = new ImagePlus( inputImage.getTitle(), 
 				inputStackCopy );
@@ -3163,7 +3555,7 @@ public class MorphologicalSegmentation implements PlugIn {
 			for(int z = 0; z < nSlices; z++){  	 	 	
 		  	 	 	for (int y = 0; y <height; y++){
 		  	 	 		for (int x = 0; x < width; x++){
-		  	 	 			IJ.log(  "  " + x + "  ");
+		  	 	 			//IJ.log(  "  " + x + "  ");
 		  	 	 			img_markers.setVoxel(x,  y,  z,  0);
 		  	 	 			nb_foundLabel = list_labels.size();
 		  	 	 			ArrayList<Integer>  newCoordinates = new ArrayList<Integer>();
@@ -3209,14 +3601,14 @@ public class MorphologicalSegmentation implements PlugIn {
 		  	 	 Random rand = new Random();
 		  	 	 int  n,Flag_In,label,Size, x,y,z;
 		  	 	 int dist = 5; // devrait varier en fonction de x,y, et z car les "distances" ne sont pas identiques puisque les pixels ne sont pas cubiques
-		  	 	 System.out.println(nb_foundLabel);
+		  	 	 //System.out.println(nb_foundLabel);
 		  	 	 for (int i =0 ; i< nb_foundLabel;i++){
-		  	 		IJ.log( "i =  " + i + " ");
+		  	 		//IJ.log( "i =  " + i + " ");
 		  	 	 	Flag_In = 0;
 		  	 	 	label =list_labels.get(i);
 		  	 	 	Size =list_coordinates.get(i).size();
-		  	 	 	System.out.println(label);
-		  	 	 	System.out.println(Size);
+		  	 	 	//System.out.println(label);
+		  	 	 	//System.out.println(Size);
 		  	 	 	do {
 		  	 	 		n = rand.nextInt(Size);
 		  	 	 		
@@ -3230,7 +3622,7 @@ public class MorphologicalSegmentation implements PlugIn {
 		  	 	 		
 		  	 	 		
 		  	 	 	} while(Flag_In == 1);
-		  	 	 	System.out.println(i);
+		  	 	 	//System.out.println(i);
 		  	 	 	img_markers.setVoxel(x,y,z,1);
 		  	 	 	//img_markers.setVoxel(list_min.get(i).get(0)+((list_max.get(i).get(0)-list_min.get(i).get(0))/2),list_min.get(i).get(1)+((list_max.get(i).get(1)-list_min.get(i).get(1))/2),list_min.get(i).get(2)+((list_max.get(i).get(2)-list_min.get(i).get(2))/2), 1);
 		  	 	 }
@@ -3243,7 +3635,7 @@ public class MorphologicalSegmentation implements PlugIn {
 		  	 	 			  	 	 			 	 		
 		  	 	 		if (img.getVoxel(x, y, z)== 0){
 		  	 	 			Flag_In = 1 ;
-		  	 	 		IJ.log( " Find ");
+		  	 	 		//IJ.log( " Find ");
 		  	 	 		} 	 	
 		  	 	 	} while(Flag_In == 1);
 		  	 	 	img_markers.setVoxel(x,y,z,1);
@@ -3376,6 +3768,49 @@ public class MorphologicalSegmentation implements PlugIn {
 	             
 	        //return smallLabels;
 		}
+		
+		/*
+		float convolve3D(const array_type& input, int x, int y, int z, int iWidth, int iHeight, int iDepth, const array_type& kernel, int kernelSize)
+		{
+
+		    auto isOutsidePixel = [&](int xPos, int yPos, int zPos)->int
+		    {
+		        if(xPos >= 0 && xPos < iWidth && yPos >= 0 && yPos < iHeight && zPos >= 0 && zPos < iDepth)
+		        {
+		            return false;
+		        }
+		        else
+		        {
+		            return true;
+		        }
+		    };
+
+		    float result = 0.0f;
+		    int xPos, yPos, zPos;
+
+		    int filterSize = 3;
+
+		    for(int k = 0; k < kernelSize; k++)
+		    {
+		        for(int j = 0; j < kernelSize; j++)
+		        {
+		            for(int i = 0; i < kernelSize; i++)
+		            {
+		                xPos = x + i-(kernelSize/2);
+		                yPos = y + j-(kernelSize/2);
+		                zPos = z + k-(kernelSize/2);
+
+
+		                if(isOutsidePixel(xPos, yPos, zPos) == false)
+		                {
+		                    result += kernel[i][j][k] * input[xPos][yPos][zPos];
+		                }
+		            }
+		        }
+		    }
+
+		    return result;
+		}*/
 		
 	// End of Elise Functions
 		
