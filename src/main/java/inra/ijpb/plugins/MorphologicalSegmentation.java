@@ -1539,29 +1539,11 @@ public class MorphologicalSegmentation implements PlugIn {
 							filterLabelSize( seuil);
 							regionalMinima = markersImage.getImageStack().duplicate();
 						}
-						else if(addMarkers || removeMarkers || localMarkers)
+						else if(addMarkers || removeMarkers || localMarkers || localFiltering)
 						{
 							regionalMinima = markersImage.getImageStack().duplicate();
 						}
-						else if (localFiltering)
-						{
-							double dynamic;
-							try{
-								dynamic = Double.parseDouble( dynamicText.getText() );
-							}
-							catch( NullPointerException ex )
-							{
-								IJ.error( "Morphological Sementation", "ERROR: missing dynamic value" );
-								return;
-							}
-							catch( NumberFormatException ex )
-							{
-								IJ.error( "Morphological Sementation", "ERROR: dynamic value must be a number" );
-								return;
-							}
-							image = 
-							regionalMinima = MinimaAndMaxima3D.extendedMinimaDouble( image, dynamic, connectivity );//modify by Elise (remove (int) in front of dynamic value)
-						}
+						
 						else
 						{			
 							
@@ -1571,6 +1553,13 @@ public class MorphologicalSegmentation implements PlugIn {
 								IJ.log( "The segmentation was interrupted!" );
 								IJ.showStatus( "The segmentation was interrupted!" );
 								IJ.showProgress( 1.0 );
+								// enable parameter panel
+								setParamsEnabled( true );
+								// set button back to initial text
+								ResegmentButton.setText( ResegmentText );
+								ResegmentButton.setToolTipText( ResegmentTip );
+								// set thread to null					
+								segmentationThread = null;
 								return;
 							}
 							regionalMinima  = LabeledImage.getStack(); // modif by Elise
@@ -2558,13 +2547,31 @@ public class MorphologicalSegmentation implements PlugIn {
 									int x = coord.get(i).get(0);
 									int y = coord.get(i).get(1);
 									int z = coord.get(i).get(2);
-									localStack.setVoxel(x, y, z,SobelFilter(x, y, z)/ImoyRef);
+									localStack.setVoxel(x, y, z,SobelFilter(x, y, z, inputStackCopy)/ImoyRef);
 								}
 								
+								ImagePlus imageLocal2 = IJ.createImage("local2", width, height, nSlices, bitDepth) ;
+								imageLocal2.setCalibration(imp.getCalibration());
+								ImageStack localStack2 = imageLocal2.getStack();
+								
+								for(int i = coord.size()-1; i>=0 ;i--)
+									
+								{										
+									int x = coord.get(i).get(0);
+									int y = coord.get(i).get(1);
+									int z = coord.get(i).get(2);
+									if ( localStack.getVoxel(x,y,z) > Integer.parseInt( gradientRadiusSizeText.getText() ))
+									{
+										localStack2.setVoxel(x, y, z, localStack.getVoxel(x,y,z));
+									}
+									
+								}
+								//imageLocal.show();
+								//Strel3D strel = Strel3D.Shape.CUBE.fromRadius(  Integer.parseInt( gradientRadiusSizeText.getText() ) ); //
+								//localStack2 = Morphology.dilation( localStack2, strel ); //erosion
+								
 								imageLocal.show();
-								Strel3D strel = Strel3D.Shape.CUBE.fromRadius(  Integer.parseInt( gradientRadiusSizeText.getText() ) ); //
-								localStack = Morphology.dilation( localStack, strel ); //erosion
-								imageLocal.show();
+								imageLocal2.show();
 								final int connectivity = readConn;
 
 								// read dynamic
@@ -2584,7 +2591,7 @@ public class MorphologicalSegmentation implements PlugIn {
 								}
 
 								// Run extended minima
-								ImageStack regionalMinima = MinimaAndMaxima3D.extendedMinimaDouble( localStack, dynamic, connectivity );
+								ImageStack regionalMinima = MinimaAndMaxima3D.extendedMinimaDouble( localStack2, dynamic, connectivity );
 								/*
 						for(int z = 0; z < nSlices; z++){  	 	 	
 							for (int y = 0; y <height; y++){
@@ -2655,7 +2662,7 @@ public class MorphologicalSegmentation implements PlugIn {
 					}
 				};
 				
-				double SobelFilter(int xc, int yc, int zc){
+				double SobelFilter(int xc, int yc, int zc, ImageStack imgStack){
 					//http://www.aravind.ca/cs788h_Final_Project/gradient_estimators.htm  ; avant : { { {1,2,1},{2,4,2},{1,2,1} },{ {0,0,0},{0,0,0},{0,0,0} },{ {-1,-2,-1},{-2,-4,-2},{-1,-2,-1} } };
 					double[][][] Sobel3DX = { { {1,3,1},{3,6,3},{1,3,1} },{ {0,0,0},{0,0,0},{0,0,0} },{ {-1,-3,-1},{-3,-6,-3},{-1,-3,-1} } };//new double[3][3][3];
 					double[][][] Sobel3DY = { { {1,3,1},{0,0,0},{-1,-3,-1} },{ {3,6,3},{0,0,0},{-3,-6,-3} },{ {1,3,1},{0,0,0},{-1,-3,-1} } };//new double[3][3][3];
@@ -2667,9 +2674,9 @@ public class MorphologicalSegmentation implements PlugIn {
 			  	 	 	for (int j = 0; j <3; j++){
 			  	 	 		for (int k = 0; k < 3; k++){ 
 			  	 	 			if (xc-1+i>0 && xc-1+i< width  && yc-1+j>0 && yc-1+j<height && zc-1+k>0 && zc-1+k< nSlices )
-			  	 	 			newI = newI+ Sobel3DX[i][j][k] * inputStackCopy.getVoxel(xc-1+i,yc-1+j,zc-1+k)
-			  	 	 				+ Sobel3DY[i][j][k] * inputStackCopy.getVoxel(xc-1+i,yc-1+j,zc-1+k)
-			  	 	 				+ Sobel3DZ[i][j][k] * inputStackCopy.getVoxel(xc-1+i,yc-1+j,zc-1+k);
+			  	 	 			newI = newI+ Math.abs(Sobel3DX[i][j][k] * imgStack.getVoxel(xc-1+i,yc-1+j,zc-1+k))
+			  	 	 				+ Math.abs(Sobel3DY[i][j][k] * imgStack.getVoxel(xc-1+i,yc-1+j,zc-1+k))
+			  	 	 				+ Math.abs(Sobel3DZ[i][j][k] * imgStack.getVoxel(xc-1+i,yc-1+j,zc-1+k));
 			  	 	 		}
 			  	 	 	}
 					}
